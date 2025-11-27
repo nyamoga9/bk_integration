@@ -1,13 +1,23 @@
 {
   "doctype": "DocType",
   "name": "BK Integration Settings",
-  "module": "BK Integration",
+  "module": "BK Payment Integration",
   "custom": 0,
-  "beta": 0,
   "istable": 0,
   "issingle": 1,
   "editable_grid": 0,
   "track_changes": 1,
+  "field_order": [
+    "enable_integration",
+    "system_full_name",
+    "system_short_name",
+    "bk_base_url",
+    "bk_auth_username",
+    "bk_auth_password",
+    "reference_doctype",
+    "reference_field",
+    "log_requests"
+  ],
   "fields": [
     {
       "fieldname": "enable_integration",
@@ -54,6 +64,20 @@
       "fieldname": "log_requests",
       "label": "Log Incoming Requests",
       "fieldtype": "Check"
+    }
+  ],
+  "permissions": [
+    {
+      "role": "System Manager",
+      "read": 1,
+      "write": 1,
+      "create": 1,
+      "delete": 1,
+      "share": 1,
+      "print": 1,
+      "email": 1,
+      "report": 1,
+      "export": 1
     }
   ]
 }
