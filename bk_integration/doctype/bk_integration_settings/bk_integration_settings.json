@@ -1,7 +1,7 @@
 {
   "doctype": "DocType",
   "name": "BK Integration Settings",
-  "module": "BK Payment Integration",
+  "module": "bk_integration",
   "custom": 0,
   "istable": 0,
   "issingle": 1,
