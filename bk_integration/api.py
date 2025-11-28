@@ -26,29 +26,19 @@ def ping():
 def get_student_customers_with_invoices(changed_since=None):
     """
     Public API for BK to:
-
-    - get list of customers in the configured Customer Group (students)
-    - with their outstanding Sales Invoices and optional item lines.
-
-    Auth:
-        Use standard ERPNext API key/secret for a dedicated integration user.
+      - get list of customers in the configured Customer Group (students)
+      - with their outstanding Sales Invoices and optional item lines.
 
     URL:
-        /api/method/bk_integration.api.get_student_customers_with_invoices
-
-    Optional query param:
-        changed_since = 'YYYY-MM-DD'  (reserved for future use: filter by modified date)
+      /api/method/bk_integration.api.get_student_customers_with_invoices
     """
 
     settings = _get_settings()
 
-    # Base customer filter
     customer_filters = {
         "customer_group": settings.student_customer_group,
         "disabled": 0,
     }
-
-    # (Optional) in future: filter by modified date if changed_since is provided
 
     customers = frappe.get_all(
         "Customer",
@@ -61,7 +51,6 @@ def get_student_customers_with_invoices(changed_since=None):
     for cust in customers:
         cust_name = cust["name"]
 
-        # Pull outstanding Sales Invoices for this customer
         inv_filters = {
             "customer": cust_name,
             "docstatus": 1,  # submitted
@@ -97,7 +86,6 @@ def get_student_customers_with_invoices(changed_since=None):
                 "currency": inv["currency"],
             }
 
-            # Optionally include line items if setting is turned on
             if getattr(settings, "expose_item_details", False):
                 items = frappe.get_all(
                     "Sales Invoice Item",
@@ -116,7 +104,6 @@ def get_student_customers_with_invoices(changed_since=None):
 
             invoice_data.append(invoice_entry)
 
-        # Only include customers that have at least one outstanding invoice
         if invoice_data:
             result.append(
                 {
