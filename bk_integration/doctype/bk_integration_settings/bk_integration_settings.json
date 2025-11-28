@@ -1,7 +1,7 @@
 {
   "doctype": "DocType",
   "name": "BK Integration Settings",
-  "module": "bk_integration",
+  "module": "BK Integration",
   "custom": 0,
   "istable": 0,
   "issingle": 1,

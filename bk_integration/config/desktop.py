@@ -7,6 +7,6 @@ def get_data():
             "color": "blue",
             "icon": "octicon octicon-link",
             "type": "module",
-            "label": _("BK Integration")
+            "label": _("BK Integration"),
         }
     ]
