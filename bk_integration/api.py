@@ -2,6 +2,7 @@ import frappe
 from frappe.utils import today
 from frappe import _
 
+
 def _get_settings():
     """Fetch and validate BK Integration Settings."""
     settings = frappe.get_single("BK Integration Settings")
@@ -15,20 +16,30 @@ def _get_settings():
     return settings
 
 
+@frappe.whitelist()
+def ping():
+    """Simple health-check endpoint."""
+    return "bk_integration API is alive"
+
+
 @frappe.whitelist(methods=["GET"])
 def get_student_customers_with_invoices(changed_since=None):
     """
     Public API for BK to:
+
     - get list of customers in the configured Customer Group (students)
     - with their outstanding Sales Invoices and optional item lines.
 
     Auth:
-      Use standard ERPNext API key/secret for a dedicated integration user.
+        Use standard ERPNext API key/secret for a dedicated integration user.
+
     URL:
-      /api/method/bk_integration.api.get_student_customers_with_invoices
+        /api/method/bk_integration.api.get_student_customers_with_invoices
+
     Optional query param:
-      changed_since = 'YYYY-MM-DD'   (future use: filter on modified date)
+        changed_since = 'YYYY-MM-DD'  (reserved for future use: filter by modified date)
     """
+
     settings = _get_settings()
 
     # Base customer filter
@@ -42,7 +53,7 @@ def get_student_customers_with_invoices(changed_since=None):
     customers = frappe.get_all(
         "Customer",
         filters=customer_filters,
-        fields=["name", "customer_name", "customer_group"]
+        fields=["name", "customer_name", "customer_group"],
     )
 
     result = []
@@ -57,7 +68,7 @@ def get_student_customers_with_invoices(changed_since=None):
             "outstanding_amount": [">", 0],
         }
 
-        if settings.default_company:
+        if getattr(settings, "default_company", None):
             inv_filters["company"] = settings.default_company
 
         invoices = frappe.get_all(
@@ -69,9 +80,9 @@ def get_student_customers_with_invoices(changed_since=None):
                 "due_date",
                 "grand_total",
                 "outstanding_amount",
-                "currency"
+                "currency",
             ],
-            order_by="due_date asc"
+            order_by="due_date asc",
         )
 
         invoice_data = []
@@ -86,13 +97,14 @@ def get_student_customers_with_invoices(changed_since=None):
                 "currency": inv["currency"],
             }
 
-            # Optionally include line items
-            if settings.expose_item_details:
+            # Optionally include line items if setting is turned on
+            if getattr(settings, "expose_item_details", False):
                 items = frappe.get_all(
                     "Sales Invoice Item",
                     filters={"parent": inv["name"]},
-                    fields=["item_code", "item_name", "amount"]
+                    fields=["item_code", "item_name", "amount"],
                 )
+
                 invoice_entry["items"] = [
                     {
                         "item_code": it["item_code"],
