@@ -8,62 +8,98 @@
   "editable_grid": 0,
   "track_changes": 1,
   "field_order": [
+    "section_integration",
     "enable_integration",
-    "system_full_name",
-    "system_short_name",
     "bk_base_url",
-    "bk_auth_username",
-    "bk_auth_password",
+    "bk_api_key",
+    "bk_api_secret",
+    "section_filters",
+    "student_customer_group",
+    "default_company",
+    "expose_item_details",
+    "section_mapping",
     "reference_doctype",
     "reference_field",
     "log_requests"
   ],
   "fields": [
     {
+      "fieldname": "section_integration",
+      "fieldtype": "Section Break",
+      "label": "BK Integration"
+    },
+    {
       "fieldname": "enable_integration",
       "label": "Enable Integration",
       "fieldtype": "Check"
     },
     {
-      "fieldname": "system_full_name",
-      "label": "System Full Name",
-      "fieldtype": "Data"
-    },
-    {
-      "fieldname": "system_short_name",
-      "label": "System Short Name",
-      "fieldtype": "Data"
-    },
-    {
       "fieldname": "bk_base_url",
-      "label": "BK Base URL",
-      "fieldtype": "Data"
+      "label": "BK API Base URL",
+      "fieldtype": "Data",
+      "description": "Base URL of BK’s API (optional – for future outbound calls)."
     },
     {
-      "fieldname": "bk_auth_username",
-      "label": "BK Auth Username",
-      "fieldtype": "Data"
+      "fieldname": "bk_api_key",
+      "label": "BK API Key",
+      "fieldtype": "Data",
+      "description": "Optional – if BK provides an API key for outbound calls."
     },
     {
-      "fieldname": "bk_auth_password",
-      "label": "BK Auth Password",
-      "fieldtype": "Password"
+      "fieldname": "bk_api_secret",
+      "label": "BK API Secret",
+      "fieldtype": "Password",
+      "description": "Optional – stored encrypted."
+    },
+    {
+      "fieldname": "section_filters",
+      "fieldtype": "Section Break",
+      "label": "Filters & Access Control"
+    },
+    {
+      "fieldname": "student_customer_group",
+      "label": "Student Customer Group",
+      "fieldtype": "Link",
+      "options": "Customer Group",
+      "description": "Only customers in this group will be exposed to BK."
+    },
+    {
+      "fieldname": "default_company",
+      "label": "Default Company",
+      "fieldtype": "Link",
+      "options": "Company",
+      "description": "Used for context / filtering invoices if needed."
+    },
+    {
+      "fieldname": "expose_item_details",
+      "label": "Expose Invoice Line Items",
+      "fieldtype": "Check",
+      "default": "1",
+      "description": "If checked, BK will receive line item names and amounts."
+    },
+    {
+      "fieldname": "section_mapping",
+      "fieldtype": "Section Break",
+      "label": "ERPNext Mapping"
     },
     {
       "fieldname": "reference_doctype",
-      "label": "Reference Doctype (Fees, Sales Invoice, etc)",
+      "label": "Reference Doctype (usually 'Sales Invoice')",
       "fieldtype": "Link",
-      "options": "DocType"
+      "options": "DocType",
+      "default": "Sales Invoice"
     },
     {
       "fieldname": "reference_field",
-      "label": "Reference Field (name, student_id, etc)",
-      "fieldtype": "Data"
+      "label": "Reference Field (e.g. student id, admission number)",
+      "fieldtype": "Data",
+      "description": "Optional custom field on Sales Invoice or Customer used as external reference."
     },
     {
       "fieldname": "log_requests",
       "label": "Log Incoming Requests",
-      "fieldtype": "Check"
+      "fieldtype": "Check",
+      "default": "1"
     }
   ],
   "permissions": [
