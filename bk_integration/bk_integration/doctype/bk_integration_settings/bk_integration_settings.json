@@ -12,7 +12,8 @@
     "enable_integration",
     "erp_base_url",
     "our_production_ip",
-    "column_bk_keys",
+    "column_bk",
+    "bk_base_url",
     "bk_payment_api_key",
     "bk_connect_api_key",
     "section_rules",
@@ -31,6 +32,10 @@
     "payment_notification_url",
     "payment_callback_url",
     "payment_reversal_url",
+    "test_connection_section",
+    "last_test_status",
+    "last_test_message",
+    "last_test_on",
     "section_logging",
     "log_requests"
   ],
@@ -49,21 +54,26 @@
       "fieldname": "erp_base_url",
       "label": "ERP Base URL",
       "fieldtype": "Data",
-      "read_only": 0,
-      "description": "Base URL BK should call (example: https://erp.twowingsis.com). If blank, the system will auto-detect using current site URL.",
+      "description": "Base URL BK should call (example: https://erp.twowingsis.com). If blank, system will auto-detect from current site URL.",
       "depends_on": "eval:doc.enable_integration"
     },
     {
       "fieldname": "our_production_ip",
       "label": "Our Production IP",
       "fieldtype": "Data",
-      "read_only": 1,
-      "description": "Detected server IP (best-effort). If you have a specific public IP to provide BK, you can add an override field later.",
+      "description": "Enter the public IP BK should whitelist (editable).",
       "depends_on": "eval:doc.enable_integration"
     },
     {
-      "fieldname": "column_bk_keys",
+      "fieldname": "column_bk",
       "fieldtype": "Column Break"
+    },
+    {
+      "fieldname": "bk_base_url",
+      "label": "BK API Base URL",
+      "fieldtype": "Data",
+      "description": "BK / UrubutoPay base URL for outbound calls (used by Test Connection). Example: https://api.example.bk",
+      "depends_on": "eval:doc.enable_integration"
     },
     {
       "fieldname": "bk_payment_api_key",
@@ -86,10 +96,9 @@
     },
     {
       "fieldname": "allowed_customer_groups",
-      "label": "Allowed Customer Groups",
-      "fieldtype": "MultiSelectList",
-      "options": "Customer Group",
-      "description": "Only customers in these groups will be accessible to BK. Leave blank to default to Student.",
+      "label": "Allowed Customer Groups (comma-separated)",
+      "fieldtype": "Data",
+      "description": "Example: Student, Alumni. Leave blank to default to Student.",
       "depends_on": "eval:doc.enable_integration"
     },
     {
@@ -191,6 +200,29 @@
       "depends_on": "eval:doc.enable_integration"
     },
     {
+      "fieldname": "test_connection_section",
+      "label": "Connection Test",
+      "fieldtype": "Section Break"
+    },
+    {
+      "fieldname": "last_test_status",
+      "label": "Last Test Status",
+      "fieldtype": "Data",
+      "read_only": 1
+    },
+    {
+      "fieldname": "last_test_message",
+      "label": "Last Test Message",
+      "fieldtype": "Small Text",
+      "read_only": 1
+    },
+    {
+      "fieldname": "last_test_on",
+      "label": "Last Tested On",
+      "fieldtype": "Datetime",
+      "read_only": 1
+    },
+    {
       "fieldname": "section_logging",
       "label": "Logging",
       "fieldtype": "Section Break"
@@ -216,6 +248,5 @@
       "report": 1,
       "export": 1
     }
-  ],
-  "modified": null
+  ]
 }

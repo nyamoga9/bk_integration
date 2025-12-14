@@ -70,16 +70,11 @@ def _issue_token(ttl_seconds: int = 86400):
 
 def _customer_allowed(customer_group: str) -> bool:
     s = _settings()
-    allowed = []
-
-    # MultiSelectList typically stores \n-separated values
-    raw = getattr(s, "allowed_customer_groups", None) or ""
-    raw = (raw or "").strip()
+    
+    raw = (getattr(s, "allowed_customer_groups", None) or "").strip()
     if raw:
-        allowed = [x.strip() for x in raw.split("\n") if x.strip()]
-
-    # fallback default if empty
-    if not allowed:
+        allowed = [x.strip() for x in raw.split(",") if x.strip()]
+    else:
         allowed = ["Student"]
 
     return (customer_group or "").strip() in allowed
@@ -409,3 +404,60 @@ def payment_reversal():
     tx.save(ignore_permissions=True)
 
     return {"status": "00", "message": "Reversed"}
+
+
+@frappe.whitelist()
+def test_bk_connection():
+    """
+    Basic connectivity test to BK:
+    - Checks that BK Base URL is set
+    - Tries a GET request to that base URL (and also tries /health and /ping as fallbacks)
+    - Stores last_test_* fields on settings
+    """
+    import requests
+    from frappe.utils import now_datetime
+
+    s = _settings()
+    if not (s.bk_base_url or "").strip():
+        frappe.throw(_("BK API Base URL is required to test connection."))
+
+    base = s.bk_base_url.rstrip("/")
+
+    candidates = [
+        base,
+        base + "/health",
+        base + "/ping",
+        base + "/api/health",
+        base + "/api/ping",
+    ]
+
+    ok = False
+    last_msg = ""
+    status_code = None
+
+    for url in candidates:
+        try:
+            r = requests.get(url, timeout=10)
+            status_code = r.status_code
+            if 200 <= r.status_code < 300:
+                ok = True
+                last_msg = f"Success: GET {url} returned {r.status_code}"
+                break
+            else:
+                last_msg = f"Reached {url} but got HTTP {r.status_code}"
+        except Exception as e:
+            last_msg = f"Failed to reach {url}: {e}"
+
+    # Save result to settings (so user sees it on form)
+    s.last_test_status = "SUCCESS" if ok else "FAILED"
+    s.last_test_message = last_msg
+    s.last_test_on = now_datetime()
+    s.save(ignore_permissions=True)
+
+    return {
+        "ok": ok,
+        "status": s.last_test_status,
+        "message": last_msg,
+        "http_status": status_code,
+        "tested_on": str(s.last_test_on),
+    }
