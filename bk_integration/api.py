@@ -44,10 +44,28 @@ def _get_payload():
 
 
 def _get_bearer_token():
-    auth = (frappe.get_request_header("Authorization") or "").strip()
+    """
+    IMPORTANT:
+    Frappe intercepts the standard Authorization header for its own auth,
+    and can throw AuthenticationError before our method runs.
+    So we support BK tokens via a custom header first.
+    """
+    auth = (
+        (frappe.get_request_header("X-BK-Authorization") or "").strip()
+        or (frappe.get_request_header("BK-Authorization") or "").strip()
+        or (frappe.get_request_header("X-Authorization") or "").strip()
+        or (frappe.get_request_header("Authorization") or "").strip()
+    )
+
     if auth.lower().startswith("bearer "):
         return auth.split(" ", 1)[1].strip()
+
+    # also allow sending token directly (no "Bearer ")
+    if auth:
+        return auth
+
     return None
+
 
 
 def _require_token():
