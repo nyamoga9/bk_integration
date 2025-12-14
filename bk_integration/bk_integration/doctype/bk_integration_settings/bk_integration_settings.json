@@ -10,16 +10,28 @@
   "field_order": [
     "section_integration",
     "enable_integration",
-    "bk_base_url",
-    "bk_api_key",
-    "bk_api_secret",
-    "section_filters",
-    "student_customer_group",
+    "erp_base_url",
+    "our_production_ip",
+    "column_bk_keys",
+    "bk_payment_api_key",
+    "bk_connect_api_key",
+    "section_rules",
+    "allowed_customer_groups",
+    "payer_code_field",
     "default_company",
+    "default_mode_of_payment",
     "expose_item_details",
-    "section_mapping",
-    "reference_doctype",
-    "reference_field",
+    "section_auth",
+    "auth_username",
+    "auth_password",
+    "token_ttl_seconds",
+    "section_urls",
+    "auth_url",
+    "validation_url",
+    "payment_notification_url",
+    "payment_callback_url",
+    "payment_reversal_url",
+    "section_logging",
     "log_requests"
   ],
   "fields": [
@@ -34,149 +46,38 @@
       "fieldtype": "Check"
     },
     {
-      "fieldname": "bk_base_url",
-      "label": "BK API Base URL",
+      "fieldname": "erp_base_url",
+      "label": "ERP Base URL",
       "fieldtype": "Data",
-      "description": "Base URL of BK\u2019s API (optional \u2013 for future outbound calls)."
-    },
-    {
-      "fieldname": "bk_api_key",
-      "label": "BK API Key",
-      "fieldtype": "Data",
-      "description": "Optional \u2013 if BK provides an API key for outbound calls."
-    },
-    {
-      "fieldname": "bk_api_secret",
-      "label": "BK API Secret",
-      "fieldtype": "Password",
-      "description": "Optional \u2013 stored encrypted."
-    },
-    {
-      "fieldname": "section_filters",
-      "fieldtype": "Section Break",
-      "label": "Filters & Access Control"
-    },
-    {
-      "fieldname": "student_customer_group",
-      "label": "Student Customer Group",
-      "fieldtype": "Link",
-      "options": "Customer Group",
-      "description": "Only customers in this group will be exposed to BK."
-    },
-    {
-      "fieldname": "default_company",
-      "label": "Default Company",
-      "fieldtype": "Link",
-      "options": "Company",
-      "description": "Used for context / filtering invoices if needed."
-    },
-    {
-      "fieldname": "expose_item_details",
-      "label": "Expose Invoice Line Items",
-      "fieldtype": "Check",
-      "default": "1",
-      "description": "If checked, BK will receive line item names and amounts."
-    },
-    {
-      "fieldname": "section_mapping",
-      "fieldtype": "Section Break",
-      "label": "ERPNext Mapping"
-    },
-    {
-      "fieldname": "reference_doctype",
-      "label": "Reference Doctype (usually 'Sales Invoice')",
-      "fieldtype": "Link",
-      "options": "DocType",
-      "default": "Sales Invoice"
-    },
-    {
-      "fieldname": "reference_field",
-      "label": "Reference Field (e.g. student id, admission number)",
-      "fieldtype": "Data",
-      "description": "Optional custom field on Sales Invoice or Customer used as external reference."
-    },
-    {
-      "fieldname": "log_requests",
-      "label": "Log Incoming Requests",
-      "fieldtype": "Check",
-      "default": "1"
-    },
-    {
-      "fieldname": "section_system",
-      "label": "System Information",
-      "fieldtype": "Section Break",
-      "insert_after": "log_requests"
-    },
-    {
-      "fieldname": "system_full_name",
-      "label": "System Full Name",
-      "fieldtype": "Data"
-    },
-    {
-      "fieldname": "system_short_name",
-      "label": "System Short Name",
-      "fieldtype": "Data"
-    },
-    {
-      "fieldname": "column_auth",
-      "fieldtype": "Column Break"
-    },
-    {
-      "fieldname": "auth_username",
-      "label": "Auth Username",
-      "fieldtype": "Data",
-      "description": "Shared with BK / UrubutoPay for authentication"
-    },
-    {
-      "fieldname": "auth_password",
-      "label": "Auth Password",
-      "fieldtype": "Password",
-      "description": "Shared with BK / UrubutoPay for authentication"
-    },
-    {
-      "fieldname": "token_ttl_seconds",
-      "label": "Token TTL (seconds)",
-      "fieldtype": "Int",
-      "default": 86400
-    },
-    {
-      "fieldname": "section_urls",
-      "label": "Webhook URLs (Your ERPNext)",
-      "fieldtype": "Section Break"
-    },
-    {
-      "fieldname": "auth_url",
-      "label": "Auth URL",
-      "fieldtype": "Data"
-    },
-    {
-      "fieldname": "validation_url",
-      "label": "Validation URL",
-      "fieldtype": "Data"
-    },
-    {
-      "fieldname": "payment_notification_url",
-      "label": "Payment notification URL",
-      "fieldtype": "Data"
-    },
-    {
-      "fieldname": "payment_callback_url",
-      "label": "Payment Callback URL",
-      "fieldtype": "Data"
-    },
-    {
-      "fieldname": "payment_reversal_url",
-      "label": "Payment reversal URL",
-      "fieldtype": "Data"
-    },
-    {
-      "fieldname": "column_prod",
-      "fieldtype": "Column Break"
+      "read_only": 0,
+      "description": "Base URL BK should call (example: https://erp.twowingsis.com). If blank, the system will auto-detect using current site URL.",
+      "depends_on": "eval:doc.enable_integration"
     },
     {
       "fieldname": "our_production_ip",
-      "label": "Our production IP",
-      "fieldtype": "Data"
+      "label": "Our Production IP",
+      "fieldtype": "Data",
+      "read_only": 1,
+      "description": "Detected server IP (best-effort). If you have a specific public IP to provide BK, you can add an override field later.",
+      "depends_on": "eval:doc.enable_integration"
+    },
+    {
+      "fieldname": "column_bk_keys",
+      "fieldtype": "Column Break"
+    },
+    {
+      "fieldname": "bk_payment_api_key",
+      "label": "BK Payment API Key",
+      "fieldtype": "Password",
+      "description": "Paste the Payment API key from BK portal (stored encrypted).",
+      "depends_on": "eval:doc.enable_integration"
+    },
+    {
+      "fieldname": "bk_connect_api_key",
+      "label": "BK Connect API Key",
+      "fieldtype": "Password",
+      "description": "Paste the Connect API key from BK portal (stored encrypted).",
+      "depends_on": "eval:doc.enable_integration"
     },
     {
       "fieldname": "section_rules",
@@ -187,24 +88,119 @@
       "fieldname": "allowed_customer_groups",
       "label": "Allowed Customer Groups",
       "fieldtype": "MultiSelectList",
-      "description": "Only customers in these groups will be accessible to BK. Leave blank to default to Student."
+      "options": "Customer Group",
+      "description": "Only customers in these groups will be accessible to BK. Leave blank to default to Student.",
+      "depends_on": "eval:doc.enable_integration"
     },
     {
       "fieldname": "payer_code_field",
-      "label": "Payer Code Field",
-      "fieldtype": "Select",
-      "options": "name\ncustomer_name\ntax_id",
-      "default": "name"
+      "label": "Payer Code Field (Customer)",
+      "fieldtype": "Data",
+      "default": "name",
+      "description": "Customer fieldname BK sends as payer_code. Use 'name' for Customer ID, or any other Customer field (including custom field like 'student_id').",
+      "depends_on": "eval:doc.enable_integration"
     },
     {
-      "fieldname": "column_defaults",
-      "fieldtype": "Column Break"
+      "fieldname": "default_company",
+      "label": "Default Company",
+      "fieldtype": "Link",
+      "options": "Company",
+      "description": "Optional: if set, invoices will be filtered by this company.",
+      "depends_on": "eval:doc.enable_integration"
     },
     {
       "fieldname": "default_mode_of_payment",
       "label": "Default Mode of Payment",
       "fieldtype": "Link",
-      "options": "Mode of Payment"
+      "options": "Mode of Payment",
+      "description": "Used when BK payment is recorded into ERPNext Payment Entry.",
+      "depends_on": "eval:doc.enable_integration"
+    },
+    {
+      "fieldname": "expose_item_details",
+      "label": "Expose Invoice Line Items",
+      "fieldtype": "Check",
+      "default": "1",
+      "description": "If checked, BK will receive invoice line item names/descriptions.",
+      "depends_on": "eval:doc.enable_integration"
+    },
+    {
+      "fieldname": "section_auth",
+      "label": "BK → ERP Authentication",
+      "fieldtype": "Section Break"
+    },
+    {
+      "fieldname": "auth_username",
+      "label": "Auth Username",
+      "fieldtype": "Data",
+      "description": "Shared with BK/UrubutoPay for calling ERP endpoints.",
+      "depends_on": "eval:doc.enable_integration"
+    },
+    {
+      "fieldname": "auth_password",
+      "label": "Auth Password",
+      "fieldtype": "Password",
+      "description": "Shared with BK/UrubutoPay for calling ERP endpoints.",
+      "depends_on": "eval:doc.enable_integration"
+    },
+    {
+      "fieldname": "token_ttl_seconds",
+      "label": "Token TTL (seconds)",
+      "fieldtype": "Int",
+      "default": 86400,
+      "depends_on": "eval:doc.enable_integration"
+    },
+    {
+      "fieldname": "section_urls",
+      "label": "Webhook URLs (Give These to BK)",
+      "fieldtype": "Section Break"
+    },
+    {
+      "fieldname": "auth_url",
+      "label": "Auth URL",
+      "fieldtype": "Data",
+      "read_only": 1,
+      "depends_on": "eval:doc.enable_integration"
+    },
+    {
+      "fieldname": "validation_url",
+      "label": "Validation URL",
+      "fieldtype": "Data",
+      "read_only": 1,
+      "depends_on": "eval:doc.enable_integration"
+    },
+    {
+      "fieldname": "payment_notification_url",
+      "label": "Payment Notification URL",
+      "fieldtype": "Data",
+      "read_only": 1,
+      "depends_on": "eval:doc.enable_integration"
+    },
+    {
+      "fieldname": "payment_callback_url",
+      "label": "Payment Callback URL",
+      "fieldtype": "Data",
+      "read_only": 1,
+      "depends_on": "eval:doc.enable_integration"
+    },
+    {
+      "fieldname": "payment_reversal_url",
+      "label": "Payment Reversal URL",
+      "fieldtype": "Data",
+      "read_only": 1,
+      "depends_on": "eval:doc.enable_integration"
+    },
+    {
+      "fieldname": "section_logging",
+      "label": "Logging",
+      "fieldtype": "Section Break"
+    },
+    {
+      "fieldname": "log_requests",
+      "label": "Log Incoming Requests",
+      "fieldtype": "Check",
+      "default": "1",
+      "depends_on": "eval:doc.enable_integration"
     }
   ],
   "permissions": [

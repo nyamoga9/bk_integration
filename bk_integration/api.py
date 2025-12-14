@@ -6,14 +6,45 @@ from frappe import _
 from frappe.utils import now_datetime, cint
 
 
+# -------------------------------
+# Helpers
+# -------------------------------
+
 def _settings():
     """Return BK Integration Settings (Single)."""
     return frappe.get_single("BK Integration Settings")
 
 
+def _get_payload():
+    """
+    Return request payload as dict.
+    Works for:
+      - Postman JSON body
+      - /api/method with form_dict
+    """
+    payload = {}
+    try:
+        # frappe.request exists in web requests; not always in console
+        if getattr(frappe, "request", None):
+            j = frappe.request.get_json(silent=True)
+            if isinstance(j, dict):
+                payload.update(j)
+    except Exception:
+        pass
+
+    # merge form_dict (querystring/form)
+    try:
+        fd = frappe.local.form_dict or {}
+        if isinstance(fd, dict):
+            payload.update(fd)
+    except Exception:
+        pass
+
+    return payload
+
+
 def _get_bearer_token():
-    auth = frappe.get_request_header("Authorization") or ""
-    auth = auth.strip()
+    auth = (frappe.get_request_header("Authorization") or "").strip()
     if auth.lower().startswith("bearer "):
         return auth.split(" ", 1)[1].strip()
     return None
@@ -40,35 +71,58 @@ def _issue_token(ttl_seconds: int = 86400):
 def _customer_allowed(customer_group: str) -> bool:
     s = _settings()
     allowed = []
-    if getattr(s, "allowed_customer_groups", None):
-        # MultiSelect stores \n separated values
-        allowed = [x.strip() for x in (s.allowed_customer_groups or "").split("\n") if x.strip()]
+
+    # MultiSelectList typically stores \n-separated values
+    raw = getattr(s, "allowed_customer_groups", None) or ""
+    raw = (raw or "").strip()
+    if raw:
+        allowed = [x.strip() for x in raw.split("\n") if x.strip()]
+
+    # fallback default if empty
     if not allowed:
-        # fallback default
         allowed = ["Student"]
-    return (customer_group or "") in allowed
+
+    return (customer_group or "").strip() in allowed
+
+
+def _customer_field_exists(fieldname: str) -> bool:
+    fieldname = (fieldname or "").strip()
+    if not fieldname:
+        return False
+    if fieldname == "name":
+        return True
+    meta = frappe.get_meta("Customer")
+    return meta.has_field(fieldname)
 
 
 def _get_customer_by_payer_code(payer_code: str):
-    """Match payer_code to Customer 'name' or to settings.payer_code_field."""
+    """
+    Match payer_code to Customer using settings.payer_code_field.
+    Supports:
+      - name (Customer ID)
+      - any valid Customer field, including custom fields
+    """
     s = _settings()
     payer_code = (payer_code or "").strip()
+    if not payer_code:
+        return None
 
-    field = (getattr(s, "payer_code_field", None) or "name").strip()
-    if field not in ("name", "customer_name", "tax_id"):
-        # custom field support (best-effort)
+    field = (getattr(s, "payer_code_field", None) or "name").strip() or "name"
+
+    # if invalid field configured, fallback to name
+    if not _customer_field_exists(field):
         field = "name"
 
     if field == "name":
-        doc = frappe.get_doc("Customer", payer_code) if frappe.db.exists("Customer", payer_code) else None
-        return doc
+        if frappe.db.exists("Customer", payer_code):
+            return frappe.get_doc("Customer", payer_code)
+        return None
 
-    # lookup by field
     name = frappe.db.get_value("Customer", {field: payer_code}, "name")
     return frappe.get_doc("Customer", name) if name else None
 
 
-def _get_outstanding_invoices(customer: str, company: str | None = None):
+def _get_outstanding_invoices(customer: str, company=None):
     filters = {"customer": customer, "docstatus": 1, "outstanding_amount": (">", 0)}
     if company:
         filters["company"] = company
@@ -84,17 +138,25 @@ def _get_outstanding_invoices(customer: str, company: str | None = None):
     for inv in invs:
         items = frappe.get_all(
             "Sales Invoice Item",
-            filters={"parent": inv["name"], "docstatus": 1},
+            filters={"parent": inv["name"]},
             fields=["item_name", "description"],
             order_by="idx asc",
         )
-        inv["items"] = [i["item_name"] or (i["description"] or "")[:60] for i in items if (i.get("item_name") or i.get("description"))]
+        inv["items"] = [
+            (i.get("item_name") or (i.get("description") or "")[:60]).strip()
+            for i in items
+            if (i.get("item_name") or i.get("description"))
+        ]
     return invs
 
 
 def _ensure_txn_log(txn_id: str):
-    if frappe.db.exists("BK Payment Transaction", {"bk_transaction_id": txn_id}):
-        return frappe.get_doc("BK Payment Transaction", {"bk_transaction_id": txn_id})
+    """
+    Create or return BK Payment Transaction record to support idempotency.
+    """
+    existing = frappe.db.get_value("BK Payment Transaction", {"bk_transaction_id": txn_id}, "name")
+    if existing:
+        return frappe.get_doc("BK Payment Transaction", existing)
 
     d = frappe.new_doc("BK Payment Transaction")
     d.bk_transaction_id = txn_id
@@ -105,11 +167,13 @@ def _ensure_txn_log(txn_id: str):
 
 
 def _make_payment_for_invoice(invoice_name: str, amount: float, reference_no: str, reference_date=None, mode_of_payment=None):
-    """Create + submit a Payment Entry against a Sales Invoice (Receive)."""
+    """
+    Create + submit a Payment Entry against a Sales Invoice (Receive).
+    """
     from erpnext.accounts.doctype.payment_entry.payment_entry import get_payment_entry
 
     pe = get_payment_entry("Sales Invoice", invoice_name)
-    # set paid amount (supports partial)
+
     amt = float(amount or 0)
     pe.paid_amount = amt
     pe.received_amount = amt
@@ -117,7 +181,6 @@ def _make_payment_for_invoice(invoice_name: str, amount: float, reference_no: st
     if mode_of_payment:
         pe.mode_of_payment = mode_of_payment
 
-    # references table already has the invoice row; adjust allocation
     if pe.references:
         pe.references[0].allocated_amount = amt
 
@@ -130,30 +193,38 @@ def _make_payment_for_invoice(invoice_name: str, amount: float, reference_no: st
     return pe.name
 
 
-@frappe.whitelist(allow_guest=True, methods=["GET"])
+# -------------------------------
+# Public API (Whitelisted)
+# -------------------------------
+
+@frappe.whitelist(allow_guest=True)
 def ping():
     """Health check endpoint (no auth)."""
     return {"status": "00", "message": "BK Integration is alive"}
 
 
-@frappe.whitelist(allow_guest=True, methods=["POST"])
+@frappe.whitelist(allow_guest=True)
 def authenticate():
     """
-    UrubutoPay / BK Authentication (Bearer token).
+    BK Authentication -> issues Bearer token for calling protected endpoints.
     Expects JSON:
       {"user_name": "...", "password": "..."}
     Returns:
       {"status":"00","message":"Success","token":"...","token_type":"Bearer","expires_in":86400}
     """
     s = _settings()
-    payload = frappe.local.form_dict or {}
+    payload = _get_payload()
+
     user_name = (payload.get("user_name") or payload.get("username") or "").strip()
     password = (payload.get("password") or "").strip()
 
     if not user_name or not password:
         return {"status": "01", "message": "Missing credentials"}
 
-    if user_name != (s.auth_username or "").strip() or password != (s.get_password("auth_password") or "").strip():
+    cfg_user = (getattr(s, "auth_username", None) or "").strip()
+    cfg_pass = (s.get_password("auth_password") or "").strip()
+
+    if user_name != cfg_user or password != cfg_pass:
         return {"status": "01", "message": "Invalid credentials"}
 
     ttl = cint(getattr(s, "token_ttl_seconds", None) or 86400)
@@ -162,18 +233,18 @@ def authenticate():
     return {"status": "00", "message": "Success", "token": token, "token_type": "Bearer", "expires_in": ttl}
 
 
-@frappe.whitelist(allow_guest=True, methods=["POST"])
+@frappe.whitelist(allow_guest=True)
 def validate_customer():
     """
     Payer Validation webhook.
     Requires Authorization: Bearer <token>
     Expects JSON:
-      {"merchant_code":"...", "payer_code":"..."}
+      {"payer_code":"..."} (or payerCode)
     Returns customer details + outstanding invoices as services.
     """
     _require_token()
+    payload = _get_payload()
 
-    payload = frappe.local.form_dict or {}
     payer_code = (payload.get("payer_code") or payload.get("payerCode") or payload.get("customer_id") or "").strip()
     if not payer_code:
         return {"status": "01", "message": "Missing payer_code"}
@@ -192,16 +263,14 @@ def validate_customer():
     for inv in invs:
         amt = float(inv.get("outstanding_amount") or 0)
         total_due += amt
-        services.append(
-            {
-                "service_code": inv["name"],  # treat Sales Invoice number as service_code
-                "service_name": f"Invoice {inv['name']}",
-                "amount": amt,
-                "currency": inv.get("currency"),
-                "due_date": str(inv.get("due_date") or ""),
-                "items": inv.get("items") or [],
-            }
-        )
+        services.append({
+            "service_code": inv["name"],  # Sales Invoice number as service_code
+            "service_name": f"Invoice {inv['name']}",
+            "amount": amt,
+            "currency": inv.get("currency"),
+            "due_date": str(inv.get("due_date") or ""),
+            "items": inv.get("items") or [],
+        })
 
     return {
         "status": "00",
@@ -216,7 +285,7 @@ def validate_customer():
     }
 
 
-@frappe.whitelist(allow_guest=True, methods=["POST"])
+@frappe.whitelist(allow_guest=True)
 def payment_notification():
     """
     Payment Notification webhook (pre-confirmation).
@@ -224,14 +293,15 @@ def payment_notification():
     Requires Authorization: Bearer <token>
     """
     _require_token()
-    payload = frappe.local.form_dict or {}
+    payload = _get_payload()
+
     txn_id = (payload.get("transaction_id") or payload.get("transactionId") or payload.get("payment_reference") or "").strip()
     if not txn_id:
         return {"status": "01", "message": "Missing transaction_id"}
 
     tx = _ensure_txn_log(txn_id)
     tx.status = "Notified"
-    tx.payer_code = (payload.get("payer_code") or "").strip()
+    tx.payer_code = (payload.get("payer_code") or payload.get("payerCode") or "").strip()
     tx.amount = float(payload.get("amount") or 0)
     tx.raw_payload = frappe.as_json(payload)
     tx.save(ignore_permissions=True)
@@ -239,7 +309,7 @@ def payment_notification():
     return {"status": "00", "message": "Received"}
 
 
-@frappe.whitelist(allow_guest=True, methods=["POST"])
+@frappe.whitelist(allow_guest=True)
 def payment_callback():
     """
     Payment Callback webhook (confirmation).
@@ -248,19 +318,23 @@ def payment_callback():
     """
     _require_token()
     s = _settings()
-    payload = frappe.local.form_dict or {}
+    payload = _get_payload()
 
     txn_id = (payload.get("transaction_id") or payload.get("transactionId") or payload.get("payment_reference") or "").strip()
     payer_code = (payload.get("payer_code") or payload.get("payerCode") or "").strip()
     service_code = (payload.get("service_code") or payload.get("serviceCode") or payload.get("invoice") or "").strip()
-    amount = float(payload.get("amount") or 0)
+
+    try:
+        amount = float(payload.get("amount") or 0)
+    except Exception:
+        amount = 0.0
 
     if not txn_id or not payer_code or not service_code or amount <= 0:
         return {"status": "01", "message": "Missing required fields (transaction_id, payer_code, service_code, amount)"}
 
     tx = _ensure_txn_log(txn_id)
 
-    # idempotency: if already completed, return ok
+    # idempotency
     if tx.status == "Completed" and tx.payment_entry:
         return {"status": "00", "message": "Already processed", "data": {"payment_entry": tx.payment_entry}}
 
@@ -277,9 +351,15 @@ def payment_callback():
         tx.save(ignore_permissions=True)
         return {"status": "01", "message": "Invoice not found (service_code)"}
 
-    # Create payment entry
-    mode_of_payment = getattr(s, "default_mode_of_payment", None) or None
-    pe_name = _make_payment_for_invoice(service_code, amount, reference_no=txn_id, reference_date=now_datetime().date(), mode_of_payment=mode_of_payment)
+    mode_of_payment = (getattr(s, "default_mode_of_payment", None) or "").strip() or None
+
+    pe_name = _make_payment_for_invoice(
+        invoice_name=service_code,
+        amount=amount,
+        reference_no=txn_id,
+        reference_date=now_datetime().date(),
+        mode_of_payment=mode_of_payment,
+    )
 
     tx.status = "Completed"
     tx.customer = customer.name
@@ -293,32 +373,35 @@ def payment_callback():
     return {"status": "00", "message": "Success", "data": {"payment_entry": pe_name}}
 
 
-@frappe.whitelist(allow_guest=True, methods=["POST"])
+@frappe.whitelist(allow_guest=True)
 def payment_reversal():
     """
     Payment Reversal webhook.
-    Cancels previously created Payment Entry (best-practice for reversal),
+    Cancels previously created Payment Entry (best-practice reversal),
     and marks transaction as Reversed.
     Requires Authorization: Bearer <token>
     """
     _require_token()
-    payload = frappe.local.form_dict or {}
+    payload = _get_payload()
+
     txn_id = (payload.get("transaction_id") or payload.get("transactionId") or payload.get("payment_reference") or "").strip()
     if not txn_id:
         return {"status": "01", "message": "Missing transaction_id"}
 
-    tx = frappe.get_doc("BK Payment Transaction", {"bk_transaction_id": txn_id}) if frappe.db.exists("BK Payment Transaction", {"bk_transaction_id": txn_id}) else None
-    if not tx:
+    tx_name = frappe.db.get_value("BK Payment Transaction", {"bk_transaction_id": txn_id}, "name")
+    if not tx_name:
         return {"status": "01", "message": "Transaction not found"}
+
+    tx = frappe.get_doc("BK Payment Transaction", tx_name)
 
     if tx.status == "Reversed":
         return {"status": "00", "message": "Already reversed"}
 
-    # cancel payment entry if exists
     if tx.payment_entry and frappe.db.exists("Payment Entry", tx.payment_entry):
         pe = frappe.get_doc("Payment Entry", tx.payment_entry)
         if pe.docstatus == 1:
             pe.cancel()
+            pe.save(ignore_permissions=True)
 
     tx.status = "Reversed"
     tx.reversed_on = now_datetime()
