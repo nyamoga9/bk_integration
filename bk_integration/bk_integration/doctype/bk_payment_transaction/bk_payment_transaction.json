@@ -1,0 +1,102 @@
+{
+  "doctype": "DocType",
+  "name": "BK Payment Transaction",
+  "module": "BK Integration",
+  "custom": 0,
+  "is_submittable": 0,
+  "is_tree": 0,
+  "istable": 0,
+  "editable_grid": 0,
+  "track_changes": 1,
+  "autoname": "hash",
+  "fields": [
+    {
+      "fieldname": "bk_transaction_id",
+      "label": "BK Transaction ID",
+      "fieldtype": "Data",
+      "reqd": 1,
+      "unique": 1,
+      "in_list_view": 1
+    },
+    {
+      "fieldname": "status",
+      "label": "Status",
+      "fieldtype": "Select",
+      "options": "Received\nNotified\nCompleted\nFailed\nReversed",
+      "default": "Received",
+      "in_list_view": 1
+    },
+    {
+      "fieldname": "customer",
+      "label": "Customer",
+      "fieldtype": "Link",
+      "options": "Customer",
+      "in_list_view": 1
+    },
+    {
+      "fieldname": "sales_invoice",
+      "label": "Sales Invoice",
+      "fieldtype": "Link",
+      "options": "Sales Invoice",
+      "in_list_view": 1
+    },
+    {
+      "fieldname": "payment_entry",
+      "label": "Payment Entry",
+      "fieldtype": "Link",
+      "options": "Payment Entry",
+      "in_list_view": 1
+    },
+    {
+      "fieldname": "amount",
+      "label": "Amount",
+      "fieldtype": "Currency",
+      "in_list_view": 1
+    },
+    {
+      "fieldname": "received_on",
+      "label": "Received On",
+      "fieldtype": "Datetime"
+    },
+    {
+      "fieldname": "completed_on",
+      "label": "Completed On",
+      "fieldtype": "Datetime"
+    },
+    {
+      "fieldname": "reversed_on",
+      "label": "Reversed On",
+      "fieldtype": "Datetime"
+    },
+    {
+      "fieldname": "payer_code",
+      "label": "Payer Code",
+      "fieldtype": "Data"
+    },
+    {
+      "fieldname": "raw_payload",
+      "label": "Raw Payload",
+      "fieldtype": "Long Text"
+    },
+    {
+      "fieldname": "reversal_payload",
+      "label": "Reversal Payload",
+      "fieldtype": "Long Text"
+    }
+  ],
+  "permissions": [
+    {
+      "role": "System Manager",
+      "read": 1,
+      "write": 1,
+      "create": 1,
+      "delete": 1,
+      "report": 1,
+      "export": 1,
+      "import": 1,
+      "email": 1,
+      "print": 1,
+      "share": 1
+    }
+  ]
+}

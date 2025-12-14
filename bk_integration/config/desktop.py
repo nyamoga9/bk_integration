@@ -11,6 +11,12 @@ def get_data():
                     "name": "BK Integration Settings",
                     "label": _("BK Integration Settings"),
                     "description": _("Configure BK API integration."),
+                },
+                {
+                    "type": "doctype",
+                    "name": "BK Payment Transaction",
+                    "label": _("BK Payment Transactions"),
+                    "description": _("BK payment callbacks / reversals log."),
                 }
             ],
         }
