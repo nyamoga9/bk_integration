@@ -1,24 +1,34 @@
-import frappe
+# Copyright (c) 2025
+# For license information, please see license.txt
+
+import socket
 from frappe.model.document import Document
-from frappe.utils import get_url
 
 
 class BKIntegrationSettings(Document):
     def validate(self):
-        # Auto-detect ERP base URL if empty
-        if not (self.erp_base_url or "").strip():
-            self.erp_base_url = get_url().rstrip("/")
+        # Auto-fill webhook URLs for the current ERP instance (erp_base_url)
+        self.set_webhook_urls()
+        # Best-effort production IP (editable by user)
+        self.set_production_ip_if_blank()
 
-        # DO NOT auto-detect production IP anymore (user wants editable + correct public IP)
-        # Keep whatever user typed.
+    def set_webhook_urls(self):
+        base = (self.erp_base_url or "").rstrip("/")
+        if not base:
+            return
 
-        self._populate_webhook_urls()
+        # Use website routes (NOT /api/method) so vendor gets top-level JSON (no "message" wrapper)
+        self.auth_url = f"{base}/urubutopay/auth"
+        self.validation_url = f"{base}/urubutopay/validate"
+        self.payment_notification_url = f"{base}/urubutopay/payment-notification"
+        self.payment_callback_url = f"{base}/urubutopay/payment-callback"
+        self.payment_reversal_url = f"{base}/urubutopay/payment-reversal"
 
-    def _populate_webhook_urls(self):
-        base = (self.erp_base_url or get_url()).rstrip("/")
-
-        self.auth_url = f"{base}/api/method/bk_integration.api.authenticate"
-        self.validation_url = f"{base}/api/method/bk_integration.api.validate_customer"
-        self.payment_notification_url = f"{base}/api/method/bk_integration.api.payment_notification"
-        self.payment_callback_url = f"{base}/api/method/bk_integration.api.payment_callback"
-        self.payment_reversal_url = f"{base}/api/method/bk_integration.api.payment_reversal"
+    def set_production_ip_if_blank(self):
+        # Only set if empty so it's user-editable
+        if self.our_production_ip:
+            return
+        try:
+            self.our_production_ip = socket.gethostbyname(socket.gethostname())
+        except Exception:
+            pass
