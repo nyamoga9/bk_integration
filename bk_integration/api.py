@@ -11,37 +11,43 @@ from frappe.utils import now_datetime, cint
 # -------------------------------
 
 def _ts():
-    # Vendor examples use: "YYYY-MM-DD HH:MM:SS"
+    # vendor wants: "2021-09-20 06:15:38"
     return now_datetime().strftime("%Y-%m-%d %H:%M:%S")
 
 
-def vendor_ok(data=None, message="Successful", status=200):
-    return {
-        "timestamp": _ts(),
-        "message": message,
-        "status": status,
-        "data": data or {},
-    }
-
-
-def vendor_err(message="Failed", status=400, data=None):
-    return {
-        "timestamp": _ts(),
-        "message": message,
-        "status": status,
-        "data": data or {},
-    }
-
-
-def vendor_response(payload: dict):
+def _respond(status: int, message: str, data=None):
     """
-    Write a vendor-shaped JSON response *without* the /api/method wrapper.
-    Use this from /www routes (urubutopay endpoints).
+    Write a vendor-style top-level response (NO Frappe 'message' wrapper).
+    IMPORTANT: callers should RETURN None after calling this.
     """
     frappe.local.response.clear()
-    frappe.local.response.update(payload)
-    frappe.local.response["type"] = "json"
-    return payload
+    frappe.local.response["timestamp"] = _ts()
+    frappe.local.response["message"] = message
+    frappe.local.response["status"] = int(status)
+    frappe.local.response["data"] = data if data is not None else {}
+
+    # Set HTTP status code too (nice-to-have)
+    frappe.local.response["http_status_code"] = int(status)
+
+
+def _ok(message="Successful", data=None):
+    _respond(200, message, data)
+
+
+def _bad_request(message="Bad Request", data=None):
+    _respond(400, message, data)
+
+
+def _unauthorized(message="Unauthorized", data=None):
+    _respond(401, message, data)
+
+
+def _not_found(message="Not Found", data=None):
+    _respond(404, message, data)
+
+
+def _server_error(message="Server Error", data=None):
+    _respond(500, message, data)
 
 
 # -------------------------------
@@ -49,14 +55,19 @@ def vendor_response(payload: dict):
 # -------------------------------
 
 def _settings():
-    """Return BK Integration Settings (Single)."""
     return frappe.get_single("BK Integration Settings")
 
 
 def _get_payload():
-    """Return request payload as dict (JSON body + form_dict)."""
+    """
+    Return request payload as dict.
+    Works for:
+      - Postman JSON body
+      - /api/method with form_dict
+    """
     payload = {}
 
+    # JSON body
     try:
         if getattr(frappe, "request", None):
             j = frappe.request.get_json(silent=True)
@@ -65,6 +76,7 @@ def _get_payload():
     except Exception:
         pass
 
+    # querystring/form fields
     try:
         fd = frappe.local.form_dict or {}
         if isinstance(fd, dict):
@@ -85,11 +97,12 @@ def _get_bearer_token():
 def _require_token():
     token = _get_bearer_token()
     if not token:
-        frappe.throw(_("Missing Authorization Bearer token"), frappe.AuthenticationError)
+        return None
 
     cache_key = f"bk_integration:token:{token}"
     if not frappe.cache().get_value(cache_key):
-        frappe.throw(_("Invalid or expired token"), frappe.AuthenticationError)
+        return None
+
     return token
 
 
@@ -118,11 +131,11 @@ def _customer_field_exists(fieldname: str) -> bool:
         return False
     if fieldname == "name":
         return True
-    return frappe.get_meta("Customer").has_field(fieldname)
+    meta = frappe.get_meta("Customer")
+    return meta.has_field(fieldname)
 
 
 def _get_customer_by_payer_code(payer_code: str):
-    """Match payer_code to Customer using settings.payer_code_field."""
     s = _settings()
     payer_code = (payer_code or "").strip()
     if not payer_code:
@@ -133,7 +146,9 @@ def _get_customer_by_payer_code(payer_code: str):
         field = "name"
 
     if field == "name":
-        return frappe.get_doc("Customer", payer_code) if frappe.db.exists("Customer", payer_code) else None
+        if frappe.db.exists("Customer", payer_code):
+            return frappe.get_doc("Customer", payer_code)
+        return None
 
     name = frappe.db.get_value("Customer", {field: payer_code}, "name")
     return frappe.get_doc("Customer", name) if name else None
@@ -151,24 +166,30 @@ def _get_outstanding_invoices(customer: str, company=None):
         order_by="due_date asc, posting_date asc",
     )
 
-    # attach item names (optional)
-    for inv in invs:
-        items = frappe.get_all(
-            "Sales Invoice Item",
-            filters={"parent": inv["name"]},
-            fields=["item_name", "description"],
-            order_by="idx asc",
-        )
-        inv["items"] = [
-            (i.get("item_name") or (i.get("description") or "")[:60]).strip()
-            for i in items
-            if (i.get("item_name") or i.get("description"))
-        ]
+    s = _settings()
+    expose_items = cint(getattr(s, "expose_item_details", None) or 0) == 1
+
+    if expose_items:
+        for inv in invs:
+            items = frappe.get_all(
+                "Sales Invoice Item",
+                filters={"parent": inv["name"]},
+                fields=["item_name", "description"],
+                order_by="idx asc",
+            )
+            inv["items"] = [
+                (i.get("item_name") or (i.get("description") or "")[:60]).strip()
+                for i in items
+                if (i.get("item_name") or i.get("description"))
+            ]
+    else:
+        for inv in invs:
+            inv["items"] = []
+
     return invs
 
 
 def _ensure_txn_log(txn_id: str):
-    """Create or return BK Payment Transaction record to support idempotency."""
     existing = frappe.db.get_value("BK Payment Transaction", {"bk_transaction_id": txn_id}, "name")
     if existing:
         return frappe.get_doc("BK Payment Transaction", existing)
@@ -182,7 +203,6 @@ def _ensure_txn_log(txn_id: str):
 
 
 def _make_payment_for_invoice(invoice_name: str, amount: float, reference_no: str, reference_date=None, mode_of_payment=None):
-    """Create + submit a Payment Entry against a Sales Invoice (Receive)."""
     from erpnext.accounts.doctype.payment_entry.payment_entry import get_payment_entry
 
     pe = get_payment_entry("Sales Invoice", invoice_name)
@@ -207,224 +227,276 @@ def _make_payment_for_invoice(invoice_name: str, amount: float, reference_no: st
 
 
 # -------------------------------
-# Core logic (returns vendor-shaped dicts)
+# Public API (Whitelisted)
+# NOTE: all endpoints write frappe.local.response and RETURN None
 # -------------------------------
 
-def core_ping():
-    return vendor_ok(message="Successful", data={"service": "BK Integration", "alive": True})
+@frappe.whitelist(allow_guest=True)
+def ping():
+    _ok("Successful", {"status": "alive"})
+    return None
 
 
-def core_authenticate():
-    s = _settings()
-    payload = _get_payload()
+@frappe.whitelist(allow_guest=True)
+def authenticate():
+    """
+    Vendor expects:
+    {
+      "timestamp": "...",
+      "message": "Successful",
+      "status": 200,
+      "data": { "token": "Bearer <token>" }
+    }
+    """
+    try:
+        s = _settings()
+        payload = _get_payload()
 
-    user_name = (payload.get("user_name") or payload.get("username") or "").strip()
-    password = (payload.get("password") or "").strip()
+        user_name = (payload.get("user_name") or payload.get("username") or "").strip()
+        password = (payload.get("password") or "").strip()
 
-    if not user_name or not password:
-        return vendor_err("Missing credentials", status=400)
+        if not user_name or not password:
+            _bad_request("Missing credentials")
+            return None
 
-    cfg_user = (getattr(s, "auth_username", None) or "").strip()
-    cfg_pass = (s.get_password("auth_password") or "").strip()
+        cfg_user = (getattr(s, "auth_username", None) or "").strip()
+        cfg_pass = (s.get_password("auth_password") or "").strip()
 
-    if user_name != cfg_user or password != cfg_pass:
-        return vendor_err("Invalid credentials", status=401)
+        if user_name != cfg_user or password != cfg_pass:
+            _unauthorized("Invalid credentials")
+            return None
 
-    ttl = cint(getattr(s, "token_ttl_seconds", None) or 86400)
-    token = _issue_token(ttl_seconds=ttl)
+        ttl = cint(getattr(s, "token_ttl_seconds", None) or 1800)
+        token = _issue_token(ttl_seconds=ttl)
 
-    # Vendor expects "Bearer <token>" in data.token
-    return vendor_ok(
-        message="Successful",
-        status=200,
-        data={"token": f"Bearer {token}", "expires_in": ttl},
-    )
+        _ok("Successful", {"token": f"Bearer {token}", "expires_in": ttl})
+        return None
+
+    except Exception:
+        frappe.log_error(frappe.get_traceback(), "BK authenticate error")
+        _server_error("Server Error")
+        return None
 
 
-def core_validate_customer():
-    _require_token()
-    payload = _get_payload()
+@frappe.whitelist(allow_guest=True)
+def validate_customer():
+    """
+    Payer Validation webhook.
+    Requires Authorization: Bearer <token>
 
-    payer_code = (payload.get("payer_code") or payload.get("payerCode") or payload.get("customer_id") or "").strip()
-    if not payer_code:
-        return vendor_err("Missing payer_code", status=400)
+    Responds in vendor envelope, with data containing payer + services
+    """
+    try:
+        token = _require_token()
+        if not token:
+            _unauthorized("Unauthorized")
+            return None
 
-    customer = _get_customer_by_payer_code(payer_code)
-    if not customer:
-        return vendor_err("Payer not found", status=404)
+        payload = _get_payload()
+        payer_code = (payload.get("payer_code") or payload.get("payerCode") or payload.get("customer_id") or "").strip()
+        if not payer_code:
+            _bad_request("Missing payer_code")
+            return None
 
-    if not _customer_allowed(customer.customer_group):
-        return vendor_err("Payer not allowed", status=403)
+        customer = _get_customer_by_payer_code(payer_code)
+        if not customer:
+            _not_found("Payer not found")
+            return None
 
-    invs = _get_outstanding_invoices(customer.name)
+        if not _customer_allowed(customer.customer_group):
+            _unauthorized("Payer not allowed")
+            return None
 
-    services = []
-    total_due = 0.0
-    for inv in invs:
-        amt = float(inv.get("outstanding_amount") or 0)
-        total_due += amt
-        services.append(
-            {
-                "service_id": inv["name"],
+        invs = _get_outstanding_invoices(customer.name)
+
+        services = []
+        total_due = 0.0
+        for inv in invs:
+            amt = float(inv.get("outstanding_amount") or 0)
+            total_due += amt
+            services.append({
                 "service_code": inv["name"],
                 "service_name": f"Invoice {inv['name']}",
                 "amount": amt,
                 "currency": inv.get("currency"),
                 "due_date": str(inv.get("due_date") or ""),
                 "items": inv.get("items") or [],
-            }
-        )
+            })
 
-    data = {
-        "payer_code": payer_code,
-        "payer_names": customer.customer_name,
-        "customer_group": customer.customer_group,
-        "total_due": total_due,
-        "services": services,
-    }
+        _ok("Successful", {
+            "payer_code": payer_code,
+            "payer_names": customer.customer_name,
+            "customer_group": customer.customer_group,
+            "total_due": total_due,
+            "services": services,
+        })
+        return None
 
-    return vendor_ok(message="Successful", status=200, data=data)
-
-
-def core_payment_notification():
-    _require_token()
-    payload = _get_payload()
-
-    txn_id = (payload.get("transaction_id") or payload.get("transactionId") or payload.get("payment_reference") or "").strip()
-    if not txn_id:
-        return vendor_err("Missing transaction_id", status=400)
-
-    tx = _ensure_txn_log(txn_id)
-    tx.status = "Notified"
-    tx.payer_code = (payload.get("payer_code") or payload.get("payerCode") or "").strip()
-    tx.amount = float(payload.get("amount") or 0)
-    tx.raw_payload = frappe.as_json(payload)
-    tx.save(ignore_permissions=True)
-
-    return vendor_ok(message="Successful", status=200, data={"transaction_id": txn_id})
-
-
-def core_payment_callback():
-    _require_token()
-    s = _settings()
-    payload = _get_payload()
-
-    txn_id = (payload.get("transaction_id") or payload.get("transactionId") or payload.get("payment_reference") or "").strip()
-    payer_code = (payload.get("payer_code") or payload.get("payerCode") or "").strip()
-    service_code = (payload.get("service_code") or payload.get("serviceCode") or payload.get("invoice") or "").strip()
-
-    try:
-        amount = float(payload.get("amount") or 0)
     except Exception:
-        amount = 0.0
-
-    if not txn_id or not payer_code or not service_code or amount <= 0:
-        return vendor_err("Missing required fields (transaction_id, payer_code, service_code, amount)", status=400)
-
-    tx = _ensure_txn_log(txn_id)
-
-    # idempotency
-    if tx.status == "Completed" and tx.payment_entry:
-        return vendor_ok(message="Successful", status=200, data={"payment_entry": tx.payment_entry, "transaction_id": txn_id})
-
-    customer = _get_customer_by_payer_code(payer_code)
-    if not customer:
-        tx.status = "Failed"
-        tx.raw_payload = frappe.as_json(payload)
-        tx.save(ignore_permissions=True)
-        return vendor_err("Payer not found", status=404)
-
-    if not frappe.db.exists("Sales Invoice", service_code):
-        tx.status = "Failed"
-        tx.raw_payload = frappe.as_json(payload)
-        tx.save(ignore_permissions=True)
-        return vendor_err("Invoice not found (service_code)", status=404)
-
-    mode_of_payment = (getattr(s, "default_mode_of_payment", None) or "").strip() or None
-
-    pe_name = _make_payment_for_invoice(
-        invoice_name=service_code,
-        amount=amount,
-        reference_no=txn_id,
-        reference_date=now_datetime().date(),
-        mode_of_payment=mode_of_payment,
-    )
-
-    tx.status = "Completed"
-    tx.customer = customer.name
-    tx.sales_invoice = service_code
-    tx.amount = amount
-    tx.payment_entry = pe_name
-    tx.raw_payload = frappe.as_json(payload)
-    tx.completed_on = now_datetime()
-    tx.save(ignore_permissions=True)
-
-    return vendor_ok(message="Successful", status=200, data={"payment_entry": pe_name, "transaction_id": txn_id})
-
-
-def core_payment_reversal():
-    _require_token()
-    payload = _get_payload()
-
-    txn_id = (payload.get("transaction_id") or payload.get("transactionId") or payload.get("payment_reference") or "").strip()
-    if not txn_id:
-        return vendor_err("Missing transaction_id", status=400)
-
-    tx_name = frappe.db.get_value("BK Payment Transaction", {"bk_transaction_id": txn_id}, "name")
-    if not tx_name:
-        return vendor_err("Transaction not found", status=404)
-
-    tx = frappe.get_doc("BK Payment Transaction", tx_name)
-
-    if tx.status == "Reversed":
-        return vendor_ok(message="Successful", status=200, data={"transaction_id": txn_id, "reversed": True})
-
-    # Cancel payment entry if exists
-    if tx.payment_entry and frappe.db.exists("Payment Entry", tx.payment_entry):
-        pe = frappe.get_doc("Payment Entry", tx.payment_entry)
-        if pe.docstatus == 1:
-            pe.cancel()
-            pe.save(ignore_permissions=True)
-
-    tx.status = "Reversed"
-    tx.reversed_on = now_datetime()
-    tx.reversal_payload = frappe.as_json(payload)
-    tx.save(ignore_permissions=True)
-
-    return vendor_ok(message="Successful", status=200, data={"transaction_id": txn_id, "reversed": True})
-
-
-# -------------------------------
-# Whitelisted methods (still usable via /api/method)
-# NOTE: /api/method wraps responses under {"message": ...}.
-# Prefer the /urubutopay/* routes (see bk_integration/www/urubutopay/) for vendor-perfect JSON.
-# -------------------------------
-
-@frappe.whitelist(allow_guest=True)
-def ping():
-    return core_ping()
-
-
-@frappe.whitelist(allow_guest=True)
-def authenticate():
-    return core_authenticate()
-
-
-@frappe.whitelist(allow_guest=True)
-def validate_customer():
-    return core_validate_customer()
+        frappe.log_error(frappe.get_traceback(), "BK validate_customer error")
+        _server_error("Server Error")
+        return None
 
 
 @frappe.whitelist(allow_guest=True)
 def payment_notification():
-    return core_payment_notification()
+    """
+    Payment Notification webhook (pre-confirmation).
+    Requires Authorization: Bearer <token>
+    """
+    try:
+        token = _require_token()
+        if not token:
+            _unauthorized("Unauthorized")
+            return None
+
+        payload = _get_payload()
+
+        txn_id = (payload.get("transaction_id") or payload.get("transactionId") or payload.get("payment_reference") or "").strip()
+        if not txn_id:
+            _bad_request("Missing transaction_id")
+            return None
+
+        tx = _ensure_txn_log(txn_id)
+        tx.status = "Notified"
+        tx.payer_code = (payload.get("payer_code") or payload.get("payerCode") or "").strip()
+        tx.amount = float(payload.get("amount") or 0)
+        tx.raw_payload = frappe.as_json(payload)
+        tx.save(ignore_permissions=True)
+
+        _ok("Successful", {"transaction_id": txn_id, "received": True})
+        return None
+
+    except Exception:
+        frappe.log_error(frappe.get_traceback(), "BK payment_notification error")
+        _server_error("Server Error")
+        return None
 
 
 @frappe.whitelist(allow_guest=True)
 def payment_callback():
-    return core_payment_callback()
+    """
+    Payment Callback webhook (confirmation).
+    Creates Payment Entry and allocates against the invoice (service_code).
+    Requires Authorization: Bearer <token>
+    """
+    try:
+        token = _require_token()
+        if not token:
+            _unauthorized("Unauthorized")
+            return None
+
+        s = _settings()
+        payload = _get_payload()
+
+        txn_id = (payload.get("transaction_id") or payload.get("transactionId") or payload.get("payment_reference") or "").strip()
+        payer_code = (payload.get("payer_code") or payload.get("payerCode") or "").strip()
+        service_code = (payload.get("service_code") or payload.get("serviceCode") or payload.get("invoice") or "").strip()
+
+        try:
+            amount = float(payload.get("amount") or 0)
+        except Exception:
+            amount = 0.0
+
+        if not txn_id or not payer_code or not service_code or amount <= 0:
+            _bad_request("Missing required fields (transaction_id, payer_code, service_code, amount)")
+            return None
+
+        tx = _ensure_txn_log(txn_id)
+
+        # idempotency
+        if tx.status == "Completed" and tx.payment_entry:
+            _ok("Successful", {"payment_entry": tx.payment_entry, "already_processed": True})
+            return None
+
+        customer = _get_customer_by_payer_code(payer_code)
+        if not customer:
+            tx.status = "Failed"
+            tx.raw_payload = frappe.as_json(payload)
+            tx.save(ignore_permissions=True)
+            _not_found("Payer not found")
+            return None
+
+        if not frappe.db.exists("Sales Invoice", service_code):
+            tx.status = "Failed"
+            tx.raw_payload = frappe.as_json(payload)
+            tx.save(ignore_permissions=True)
+            _not_found("Invoice not found (service_code)")
+            return None
+
+        mode_of_payment = (getattr(s, "default_mode_of_payment", None) or "").strip() or None
+
+        pe_name = _make_payment_for_invoice(
+            invoice_name=service_code,
+            amount=amount,
+            reference_no=txn_id,
+            reference_date=now_datetime().date(),
+            mode_of_payment=mode_of_payment,
+        )
+
+        tx.status = "Completed"
+        tx.customer = customer.name
+        tx.sales_invoice = service_code
+        tx.amount = amount
+        tx.payment_entry = pe_name
+        tx.raw_payload = frappe.as_json(payload)
+        tx.completed_on = now_datetime()
+        tx.save(ignore_permissions=True)
+
+        _ok("Successful", {"payment_entry": pe_name})
+        return None
+
+    except Exception:
+        frappe.log_error(frappe.get_traceback(), "BK payment_callback error")
+        _server_error("Server Error")
+        return None
 
 
 @frappe.whitelist(allow_guest=True)
 def payment_reversal():
-    return core_payment_reversal()
+    """
+    Payment Reversal webhook:
+    Cancels previously created Payment Entry, marks transaction Reversed.
+    Requires Authorization: Bearer <token>
+    """
+    try:
+        token = _require_token()
+        if not token:
+            _unauthorized("Unauthorized")
+            return None
+
+        payload = _get_payload()
+        txn_id = (payload.get("transaction_id") or payload.get("transactionId") or payload.get("payment_reference") or "").strip()
+        if not txn_id:
+            _bad_request("Missing transaction_id")
+            return None
+
+        tx_name = frappe.db.get_value("BK Payment Transaction", {"bk_transaction_id": txn_id}, "name")
+        if not tx_name:
+            _not_found("Transaction not found")
+            return None
+
+        tx = frappe.get_doc("BK Payment Transaction", tx_name)
+
+        if tx.status == "Reversed":
+            _ok("Successful", {"already_reversed": True})
+            return None
+
+        if tx.payment_entry and frappe.db.exists("Payment Entry", tx.payment_entry):
+            pe = frappe.get_doc("Payment Entry", tx.payment_entry)
+            if pe.docstatus == 1:
+                pe.cancel()
+                pe.save(ignore_permissions=True)
+
+        tx.status = "Reversed"
+        tx.reversed_on = now_datetime()
+        tx.reversal_payload = frappe.as_json(payload)
+        tx.save(ignore_permissions=True)
+
+        _ok("Successful", {"reversed": True})
+        return None
+
+    except Exception:
+        frappe.log_error(frappe.get_traceback(), "BK payment_reversal error")
+        _server_error("Server Error")
+        return None
