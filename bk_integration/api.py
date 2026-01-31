@@ -15,34 +15,32 @@ def _settings():
     return frappe.get_single("BK Integration Settings")
 
 
-def _vendor_response(status: int, message: str, data=None):
-    """
-    Vendor response format:
-    {
-      "timestamp": "...",
-      "message": "Successful",
-      "status": 200,
-      "data": {...}
-    }
-    """
+def _vendor_timestamp():
+    # Format required by UrubutoPay docs: YYYY-MM-DD HH:MM:SS
+    return now_datetime().strftime("%Y-%m-%d %H:%M:%S")
+
+
+def _vendor_ok(data=None, message="Successful", status=200):
     return {
-        "timestamp": now_datetime().strftime("%Y-%m-%d %H:%M:%S"),
+        "timestamp": _vendor_timestamp(),
         "message": message,
         "status": int(status),
-        "data": data or {}
+        "data": data or {},
+    }
+
+
+def _vendor_fail(message="Unauthorized", status=401, data=None):
+    return {
+        "timestamp": _vendor_timestamp(),
+        "message": message,
+        "status": int(status),
+        "data": data or {},
     }
 
 
 def _get_payload():
-    """
-    Return request payload as dict.
-    Works for:
-      - Postman JSON body
-      - /api/method with form_dict
-    """
+    """Return request payload as dict (JSON body + form_dict)."""
     payload = {}
-
-    # JSON body
     try:
         if getattr(frappe, "request", None):
             j = frappe.request.get_json(silent=True)
@@ -51,7 +49,6 @@ def _get_payload():
     except Exception:
         pass
 
-    # form/querystring
     try:
         fd = frappe.local.form_dict or {}
         if isinstance(fd, dict):
@@ -62,28 +59,18 @@ def _get_payload():
     return payload
 
 
-def _get_bearer_token(payload=None):
+def _get_bearer_token():
     """
-    IMPORTANT:
-    Frappe can intercept the standard Authorization header for its own auth,
-    and can throw AuthenticationError before our method runs.
-    So we support BK tokens via custom headers first, and also allow token in body.
+    Token lookup strategy:
+    - Prefer custom headers so we can bypass any framework-level auth assumptions
+    - Still accept standard Authorization header if present
 
-    Supported headers (in priority):
-      - X-BK-Authorization: Bearer <token>   (RECOMMENDED)
-      - BK-Authorization: Bearer <token>
-      - X-Authorization: Bearer <token>
-      - Authorization: Bearer <token>        (may be intercepted by Frappe in some cases)
+    Supported headers (first match wins):
+      X-BK-Authorization, BK-Authorization, X-Authorization, Authorization
 
-    Supported payload fields (fallback):
-      - token
-      - access_token
-      - bearer_token
-      - authorization
-      - Authorization
+    Expected value:
+      "Bearer <token>"  OR  "<token>"
     """
-    payload = payload or {}
-
     auth = (
         (frappe.get_request_header("X-BK-Authorization") or "").strip()
         or (frappe.get_request_header("BK-Authorization") or "").strip()
@@ -91,38 +78,21 @@ def _get_bearer_token(payload=None):
         or (frappe.get_request_header("Authorization") or "").strip()
     )
 
-    # If nothing in headers, look in payload
-    if not auth:
-        auth = (
-            (payload.get("token") or "").strip()
-            or (payload.get("access_token") or "").strip()
-            or (payload.get("bearer_token") or "").strip()
-            or (payload.get("authorization") or "").strip()
-            or (payload.get("Authorization") or "").strip()
-        )
-
     if not auth:
         return None
 
-    # if "Bearer xxx"
     if auth.lower().startswith("bearer "):
         return auth.split(" ", 1)[1].strip()
 
-    # allow raw token
-    return auth.strip()
+    # allow sending token directly (no "Bearer ")
+    return auth.strip() or None
 
 
-def _require_token():
-    payload = _get_payload()
-    token = _get_bearer_token(payload)
+def _is_valid_token(token: str) -> bool:
     if not token:
-        frappe.throw(_("Missing Authorization Bearer token"), frappe.AuthenticationError)
-
+        return False
     cache_key = f"bk_integration:token:{token}"
-    if not frappe.cache().get_value(cache_key):
-        frappe.throw(_("Invalid or expired token"), frappe.AuthenticationError)
-
-    return token
+    return bool(frappe.cache().get_value(cache_key))
 
 
 def _issue_token(ttl_seconds: int = 86400):
@@ -134,9 +104,8 @@ def _issue_token(ttl_seconds: int = 86400):
 
 def _customer_allowed(customer_group: str) -> bool:
     s = _settings()
-    raw = (getattr(s, "allowed_customer_groups", None) or "").strip()
 
-    # comma-separated list, default Student if empty
+    raw = (getattr(s, "allowed_customer_groups", None) or "").strip()
     if raw:
         allowed = [x.strip() for x in raw.split(",") if x.strip()]
     else:
@@ -156,19 +125,13 @@ def _customer_field_exists(fieldname: str) -> bool:
 
 
 def _get_customer_by_payer_code(payer_code: str):
-    """
-    Match payer_code to Customer using settings.payer_code_field.
-    Supports:
-      - name (Customer ID)
-      - any valid Customer field, including custom fields
-    """
+    """Match payer_code to Customer using settings.payer_code_field."""
     s = _settings()
     payer_code = (payer_code or "").strip()
     if not payer_code:
         return None
 
     field = (getattr(s, "payer_code_field", None) or "name").strip() or "name"
-
     if not _customer_field_exists(field):
         field = "name"
 
@@ -206,14 +169,11 @@ def _get_outstanding_invoices(customer: str, company=None):
             for i in items
             if (i.get("item_name") or i.get("description"))
         ]
-
     return invs
 
 
 def _ensure_txn_log(txn_id: str):
-    """
-    Create or return BK Payment Transaction record to support idempotency.
-    """
+    """Create or return BK Payment Transaction record to support idempotency."""
     existing = frappe.db.get_value("BK Payment Transaction", {"bk_transaction_id": txn_id}, "name")
     if existing:
         return frappe.get_doc("BK Payment Transaction", existing)
@@ -227,9 +187,7 @@ def _ensure_txn_log(txn_id: str):
 
 
 def _make_payment_for_invoice(invoice_name: str, amount: float, reference_no: str, reference_date=None, mode_of_payment=None):
-    """
-    Create + submit a Payment Entry against a Sales Invoice (Receive).
-    """
+    """Create + submit a Payment Entry against a Sales Invoice (Receive)."""
     from erpnext.accounts.doctype.payment_entry.payment_entry import get_payment_entry
 
     pe = get_payment_entry("Sales Invoice", invoice_name)
@@ -253,24 +211,61 @@ def _make_payment_for_invoice(invoice_name: str, amount: float, reference_no: st
     return pe.name
 
 
+def _require_vendor_auth():
+    """
+    Returns (ok, token_or_response).
+
+    We do NOT raise frappe.AuthenticationError because that produces a Frappe-formatted payload
+    that UrubutoPay won't understand.
+    """
+    token = _get_bearer_token()
+    if not token or not _is_valid_token(token):
+        return False, _vendor_fail(message="Unauthorized", status=401, data={})
+    return True, token
+
+
+def _require_merchant_code(payload: dict):
+    s = _settings()
+    expected = (getattr(s, "merchant_code", None) or "").strip()
+    got = (payload.get("merchant_code") or payload.get("merchantCode") or "").strip()
+
+    if not expected:
+        return False, _vendor_fail(message="Merchant code not configured", status=500, data={})
+
+    if not got:
+        return False, _vendor_fail(message="merchant_code is required", status=400, data={})
+
+    if got != expected:
+        return False, _vendor_fail(message="Invalid merchant_code", status=401, data={})
+
+    return True, got
+
+
 # -------------------------------
 # Public API (Whitelisted)
 # -------------------------------
 
 @frappe.whitelist(allow_guest=True)
 def ping():
-    # No auth
-    return _vendor_response(200, "Successful", {"service": "BK Integration is alive"})
+    """Health check endpoint (no auth)."""
+    return _vendor_ok({"alive": True}, message="BK Integration is alive", status=200)
 
 
 @frappe.whitelist(allow_guest=True)
 def authenticate():
     """
-    Issues Bearer token for calling protected endpoints.
+    UrubutoPay Authentication -> issues Bearer token for calling protected endpoints.
+
     Expects JSON:
       {"user_name": "...", "password": "..."}
-    Returns vendor format:
-      {"status":200,"data":{"token":"Bearer <token>"}}
+
+    Returns (per UrubutoPay docs):
+      {
+        "timestamp": "YYYY-MM-DD HH:MM:SS",
+        "message": "Successful",
+        "status": 200,
+        "data": {"token": "Bearer <token>"}
+      }
     """
     s = _settings()
     payload = _get_payload()
@@ -279,80 +274,122 @@ def authenticate():
     password = (payload.get("password") or "").strip()
 
     if not user_name or not password:
-        return _vendor_response(400, "Missing credentials", {})
+        return _vendor_fail(message="Missing credentials", status=400, data={})
 
     cfg_user = (getattr(s, "auth_username", None) or "").strip()
     cfg_pass = (s.get_password("auth_password") or "").strip()
 
     if user_name != cfg_user or password != cfg_pass:
-        return _vendor_response(401, "Unauthorized", {})
+        return _vendor_fail(message="Unauthorized", status=401, data={})
 
     ttl = cint(getattr(s, "token_ttl_seconds", None) or 86400)
     token = _issue_token(ttl_seconds=ttl)
 
-    return _vendor_response(200, "Successful", {"token": f"Bearer {token}", "expires_in": ttl})
+    return _vendor_ok({"token": f"Bearer {token}"}, message="Successful", status=200)
 
 
 @frappe.whitelist(allow_guest=True)
 def validate_customer():
     """
-    Requires token.
+    Payer Validation webhook.
+    Requires a valid token and merchant_code.
+
     Expects JSON:
-      {"payer_code":"..."} (or payerCode)
+      {"merchant_code": "...", "payer_code": "..."}
     """
-    _require_token()
+    ok, token_or_resp = _require_vendor_auth()
+    if not ok:
+        return token_or_resp
+
     payload = _get_payload()
+
+    ok, mc_or_resp = _require_merchant_code(payload)
+    if not ok:
+        return mc_or_resp
 
     payer_code = (payload.get("payer_code") or payload.get("payerCode") or payload.get("customer_id") or "").strip()
     if not payer_code:
-        return _vendor_response(400, "Missing payer_code", {})
+        return _vendor_fail(message="payer_code is required", status=400, data={})
 
     customer = _get_customer_by_payer_code(payer_code)
     if not customer:
-        return _vendor_response(404, "Payer not found", {})
+        return _vendor_fail(message="Payer not found", status=404, data={})
 
     if not _customer_allowed(customer.customer_group):
-        return _vendor_response(403, "Payer not allowed", {})
+        return _vendor_fail(message="Payer not allowed", status=403, data={})
 
-    invs = _get_outstanding_invoices(customer.name)
+    s = _settings()
+    invs = _get_outstanding_invoices(customer.name, company=(getattr(s, "default_company", None) or None))
+
+    bank_name = (getattr(s, "default_service_bank_name", None) or "").strip()
+    account_number = (getattr(s, "default_service_account_number", None) or "").strip()
 
     services = []
     total_due = 0.0
+    currency = "RWF"
+
     for inv in invs:
         amt = float(inv.get("outstanding_amount") or 0)
         total_due += amt
+        currency = (inv.get("currency") or currency)
+
         services.append({
+            "service_id": inv["name"],
             "service_code": inv["name"],
             "service_name": f"Invoice {inv['name']}",
             "amount": amt,
-            "currency": inv.get("currency"),
-            "due_date": str(inv.get("due_date") or ""),
-            "items": inv.get("items") or [],
+            "account_number": account_number,
+            "bank_name": bank_name,
+            "is_recurring_enabled": False,
         })
 
     data = {
+        "merchant_code": (getattr(s, "merchant_code", None) or "").strip(),
+        "merchant_name": (getattr(s, "merchant_name", None) or "").strip(),
+        "merchant_short_name": (getattr(s, "merchant_short_name", None) or "").strip(),
+        "payer_to_be_charged": (getattr(s, "payer_to_be_charged", None) or "NO").strip() or "NO",
+        "accept_card_payment": (getattr(s, "accept_card_payment", None) or "YES").strip() or "YES",
+        "need_term_and_year": (getattr(s, "need_term_and_year", None) or "NO").strip() or "NO",
+        "number_of_term": cint(getattr(s, "number_of_term", None) or 0),
+        "term_label_name": (getattr(s, "term_label_name", None) or "TERM").strip() or "TERM",
+        "commission_rate": float(getattr(s, "commission_rate", None) or 0),
+        "card_commission_rate": float(getattr(s, "card_commission_rate", None) or 0),
+        "wallet_bank_settlement": (getattr(s, "wallet_bank_settlement", None) or "").strip(),
+        "services": services,
+
         "payer_code": payer_code,
         "payer_names": customer.customer_name,
-        "customer_group": customer.customer_group,
-        "total_due": total_due,
-        "services": services,
+        "amount": total_due,
+        "currency": currency,
+
+        # As requested: always NO
+        "payer_must_pay_total_amount": "NO",
+        "comment": "",
     }
 
-    return _vendor_response(200, "Successful", data)
+    msc = (getattr(s, "merchant_short_code", None) or "").strip()
+    if msc:
+        data["merchant_short_code"] = msc
+
+    return _vendor_ok(data, message="Successful", status=200)
 
 
 @frappe.whitelist(allow_guest=True)
 def payment_notification():
-    """
-    Requires token.
-    Stores transaction payload for audit/idempotency.
-    """
-    _require_token()
+    """Payment Notification webhook (pre-confirmation)."""
+    ok, token_or_resp = _require_vendor_auth()
+    if not ok:
+        return token_or_resp
+
     payload = _get_payload()
+
+    ok, mc_or_resp = _require_merchant_code(payload)
+    if not ok:
+        return mc_or_resp
 
     txn_id = (payload.get("transaction_id") or payload.get("transactionId") or payload.get("payment_reference") or "").strip()
     if not txn_id:
-        return _vendor_response(400, "Missing transaction_id", {})
+        return _vendor_fail(message="transaction_id is required", status=400, data={})
 
     tx = _ensure_txn_log(txn_id)
     tx.status = "Notified"
@@ -361,18 +398,22 @@ def payment_notification():
     tx.raw_payload = frappe.as_json(payload)
     tx.save(ignore_permissions=True)
 
-    return _vendor_response(200, "Successful", {"transaction_id": txn_id})
+    return _vendor_ok({"transaction_id": txn_id}, message="Received", status=200)
 
 
 @frappe.whitelist(allow_guest=True)
 def payment_callback():
-    """
-    Requires token.
-    Creates Payment Entry and allocates against the invoice (service_code).
-    """
-    _require_token()
+    """Payment Callback webhook (confirmation)."""
+    ok, token_or_resp = _require_vendor_auth()
+    if not ok:
+        return token_or_resp
+
     s = _settings()
     payload = _get_payload()
+
+    ok, mc_or_resp = _require_merchant_code(payload)
+    if not ok:
+        return mc_or_resp
 
     txn_id = (payload.get("transaction_id") or payload.get("transactionId") or payload.get("payment_reference") or "").strip()
     payer_code = (payload.get("payer_code") or payload.get("payerCode") or "").strip()
@@ -384,26 +425,25 @@ def payment_callback():
         amount = 0.0
 
     if not txn_id or not payer_code or not service_code or amount <= 0:
-        return _vendor_response(400, "Missing required fields", {})
+        return _vendor_fail(message="Missing required fields (transaction_id, payer_code, service_code, amount)", status=400, data={})
 
     tx = _ensure_txn_log(txn_id)
 
-    # idempotency
     if tx.status == "Completed" and tx.payment_entry:
-        return _vendor_response(200, "Successful", {"payment_entry": tx.payment_entry, "note": "Already processed"})
+        return _vendor_ok({"payment_entry": tx.payment_entry}, message="Already processed", status=200)
 
     customer = _get_customer_by_payer_code(payer_code)
     if not customer:
         tx.status = "Failed"
         tx.raw_payload = frappe.as_json(payload)
         tx.save(ignore_permissions=True)
-        return _vendor_response(404, "Payer not found", {})
+        return _vendor_fail(message="Payer not found", status=404, data={})
 
     if not frappe.db.exists("Sales Invoice", service_code):
         tx.status = "Failed"
         tx.raw_payload = frappe.as_json(payload)
         tx.save(ignore_permissions=True)
-        return _vendor_response(404, "Invoice not found", {})
+        return _vendor_fail(message="Invoice not found (service_code)", status=404, data={})
 
     mode_of_payment = (getattr(s, "default_mode_of_payment", None) or "").strip() or None
 
@@ -424,32 +464,35 @@ def payment_callback():
     tx.completed_on = now_datetime()
     tx.save(ignore_permissions=True)
 
-    return _vendor_response(200, "Successful", {"payment_entry": pe_name})
+    return _vendor_ok({"payment_entry": pe_name}, message="Successful", status=200)
 
 
 @frappe.whitelist(allow_guest=True)
 def payment_reversal():
-    """
-    Requires token.
-    Cancels previously created Payment Entry and marks transaction as Reversed.
-    """
-    _require_token()
+    """Payment Reversal webhook."""
+    ok, token_or_resp = _require_vendor_auth()
+    if not ok:
+        return token_or_resp
+
     payload = _get_payload()
+
+    ok, mc_or_resp = _require_merchant_code(payload)
+    if not ok:
+        return mc_or_resp
 
     txn_id = (payload.get("transaction_id") or payload.get("transactionId") or payload.get("payment_reference") or "").strip()
     if not txn_id:
-        return _vendor_response(400, "Missing transaction_id", {})
+        return _vendor_fail(message="transaction_id is required", status=400, data={})
 
     tx_name = frappe.db.get_value("BK Payment Transaction", {"bk_transaction_id": txn_id}, "name")
     if not tx_name:
-        return _vendor_response(404, "Transaction not found", {})
+        return _vendor_fail(message="Transaction not found", status=404, data={})
 
     tx = frappe.get_doc("BK Payment Transaction", tx_name)
 
     if tx.status == "Reversed":
-        return _vendor_response(200, "Successful", {"note": "Already reversed", "transaction_id": txn_id})
+        return _vendor_ok({"transaction_id": txn_id}, message="Already reversed", status=200)
 
-    # cancel payment entry if exists
     if tx.payment_entry and frappe.db.exists("Payment Entry", tx.payment_entry):
         pe = frappe.get_doc("Payment Entry", tx.payment_entry)
         if pe.docstatus == 1:
@@ -461,4 +504,47 @@ def payment_reversal():
     tx.reversal_payload = frappe.as_json(payload)
     tx.save(ignore_permissions=True)
 
-    return _vendor_response(200, "Successful", {"transaction_id": txn_id, "status": "Reversed"})
+    return _vendor_ok({"transaction_id": txn_id}, message="Reversed", status=200)
+
+
+@frappe.whitelist()
+def test_bk_connection():
+    """
+    Basic connectivity test (optional):
+    - Checks that BK Base URL is set
+    - Tries a GET request to that base URL (and also tries /health and /ping as fallbacks)
+    """
+    import requests
+
+    s = _settings()
+    if not (getattr(s, "bk_base_url", None) or "").strip():
+        frappe.throw(_("BK API Base URL is required to test connection."))
+
+    base = s.bk_base_url.rstrip("/")
+
+    candidates = [
+        base,
+        base + "/health",
+        base + "/ping",
+        base + "/api/health",
+        base + "/api/ping",
+    ]
+
+    ok = False
+    last_msg = ""
+    status_code = None
+
+    for url in candidates:
+        try:
+            r = requests.get(url, timeout=10)
+            status_code = r.status_code
+            if 200 <= r.status_code < 300:
+                ok = True
+                last_msg = f"Success: GET {url} returned {r.status_code}"
+                break
+            else:
+                last_msg = f"Reached {url} but got HTTP {r.status_code}"
+        except Exception as e:
+            last_msg = f"Failed to reach {url}: {e}"
+
+    return {"ok": ok, "message": last_msg, "http_status": status_code}
