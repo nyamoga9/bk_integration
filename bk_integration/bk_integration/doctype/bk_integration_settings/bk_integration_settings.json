@@ -1,142 +1,236 @@
 {
-  "actions": [],
-  "allow_rename": 0,
-  "autoname": "prompt",
-  "creation": "2025-02-07 19:45:07.163248",
   "doctype": "DocType",
-  "engine": "InnoDB",
+  "name": "BK Integration Settings",
+  "module": "BK Integration",
+  "custom": 0,
+  "istable": 0,
+  "issingle": 1,
+  "editable_grid": 0,
+  "track_changes": 1,
   "field_order": [
-    "section_authentication",
-    "system_full_name",
-    "system_short_name",
-    "auth_username",
-    "auth_password",
-    "token_ttl_seconds",
+    "section_integration",
+    "enable_integration",
+    "erp_base_url",
+    "our_production_ip",
+    "column_bk",
+    "bk_base_url",
+    "bk_payment_api_key",
+    "bk_connect_api_key",
     "section_rules",
     "allowed_customer_groups",
     "payer_code_field",
-    "merchant_code",
-    "merchant_short_code",
-    "section_defaults",
+    "default_company",
     "default_mode_of_payment",
-    "default_company"
+    "expose_item_details",
+    "section_auth",
+    "auth_username",
+    "auth_password",
+    "token_ttl_seconds",
+    "section_urls",
+    "auth_url",
+    "validation_url",
+    "payment_notification_url",
+    "payment_callback_url",
+    "payment_reversal_url",
+    "test_connection_section",
+    "last_test_status",
+    "last_test_message",
+    "last_test_on",
+    "section_logging",
+    "log_requests"
   ],
   "fields": [
     {
-      "fieldname": "section_authentication",
+      "fieldname": "section_integration",
       "fieldtype": "Section Break",
-      "label": "Authentication"
+      "label": "BK Integration"
     },
     {
-      "description": "Displayed in UrubutoPay responses as merchant_name.",
-      "fieldname": "system_full_name",
+      "fieldname": "enable_integration",
+      "label": "Enable Integration",
+      "fieldtype": "Check"
+    },
+    {
+      "fieldname": "erp_base_url",
+      "label": "ERP Base URL",
       "fieldtype": "Data",
-      "label": "System Full Name",
-      "reqd": 1
+      "description": "Base URL BK should call (example: https://erp.twowingsis.com). If blank, system will auto-detect from current site URL.",
+      "depends_on": "eval:doc.enable_integration"
     },
     {
-      "description": "Displayed in UrubutoPay responses as merchant_short_name.",
-      "fieldname": "system_short_name",
+      "fieldname": "our_production_ip",
+      "label": "Our Production IP",
       "fieldtype": "Data",
-      "label": "System Short Name",
-      "reqd": 1
+      "description": "Enter the public IP BK should whitelist (editable).",
+      "depends_on": "eval:doc.enable_integration"
+    },
+	{
+	  "fieldname": "merchant_code",
+	  "label": "Merchant Code",
+	  "fieldtype": "Data",
+	  "description": "Merchant code provided by UrubutoPay/BK. Incoming requests must match this value."
+	},
+    {
+      "fieldname": "column_bk",
+      "fieldtype": "Column Break"
     },
     {
-      "fieldname": "auth_username",
+      "fieldname": "bk_base_url",
+      "label": "BK API Base URL",
       "fieldtype": "Data",
-      "label": "Auth Username",
-      "reqd": 1
+      "description": "BK / UrubutoPay base URL for outbound calls (used by Test Connection). Example: https://api.example.bk",
+      "depends_on": "eval:doc.enable_integration"
     },
     {
-      "fieldname": "auth_password",
+      "fieldname": "bk_payment_api_key",
+      "label": "BK Payment API Key",
       "fieldtype": "Password",
-      "label": "Auth Password",
-      "reqd": 1
+      "description": "Paste the Payment API key from BK portal (stored encrypted).",
+      "depends_on": "eval:doc.enable_integration"
     },
     {
-      "default": "1800",
-      "fieldname": "token_ttl_seconds",
-      "fieldtype": "Int",
-      "label": "Token TTL (seconds)",
-      "reqd": 1
+      "fieldname": "bk_connect_api_key",
+      "label": "BK Connect API Key",
+      "fieldtype": "Password",
+      "description": "Paste the Connect API key from BK portal (stored encrypted).",
+      "depends_on": "eval:doc.enable_integration"
     },
     {
       "fieldname": "section_rules",
-      "fieldtype": "Section Break",
-      "label": "Rules"
+      "label": "Rules",
+      "fieldtype": "Section Break"
     },
     {
-      "description": "Comma-separated. Only customers in these groups are allowed. Default: Student",
       "fieldname": "allowed_customer_groups",
+      "label": "Allowed Customer Groups (comma-separated)",
       "fieldtype": "Data",
-      "label": "Allowed Customer Groups"
+      "description": "Example: Student, Alumni. Leave blank to default to Student.",
+      "depends_on": "eval:doc.enable_integration"
     },
     {
-      "default": "name",
-      "description": "Customer field to match payer_code (e.g. name, custom ID field).",
       "fieldname": "payer_code_field",
+      "label": "Payer Code Field (Customer)",
       "fieldtype": "Data",
-      "label": "Payer Code Field"
+      "default": "name",
+      "description": "Customer fieldname BK sends as payer_code. Use 'name' for Customer ID, or any other Customer field (including custom field like 'student_id').",
+      "depends_on": "eval:doc.enable_integration"
     },
     {
-      "description": "Merchant code provided by UrubutoPay (required in webhook payloads).",
-      "fieldname": "merchant_code",
-      "fieldtype": "Data",
-      "label": "Merchant Code",
-      "reqd": 0
-    },
-    {
-      "description": "Optional merchant short code if required by UrubutoPay.",
-      "fieldname": "merchant_short_code",
-      "fieldtype": "Data",
-      "label": "Merchant Short Code",
-      "reqd": 0
-    },
-    {
-      "fieldname": "section_defaults",
-      "fieldtype": "Section Break",
-      "label": "Defaults"
-    },
-    {
-      "description": "Used when creating Payment Entry.",
-      "fieldname": "default_mode_of_payment",
-      "fieldtype": "Link",
-      "label": "Default Mode of Payment",
-      "options": "Mode of Payment"
-    },
-    {
-      "description": "Optional: if set, invoice lookup is limited to this Company.",
       "fieldname": "default_company",
-      "fieldtype": "Link",
       "label": "Default Company",
-      "options": "Company"
+      "fieldtype": "Link",
+      "options": "Company",
+      "description": "Optional: if set, invoices will be filtered by this company.",
+      "depends_on": "eval:doc.enable_integration"
+    },
+    {
+      "fieldname": "default_mode_of_payment",
+      "label": "Default Mode of Payment",
+      "fieldtype": "Link",
+      "options": "Mode of Payment",
+      "description": "Used when BK payment is recorded into ERPNext Payment Entry.",
+      "depends_on": "eval:doc.enable_integration"
+    },
+    {
+      "fieldname": "expose_item_details",
+      "label": "Expose Invoice Line Items",
+      "fieldtype": "Check",
+      "default": "1",
+      "description": "If checked, BK will receive invoice line item names/descriptions.",
+      "depends_on": "eval:doc.enable_integration"
+    },
+    {
+      "fieldname": "section_auth",
+      "label": "BK → ERP Authentication",
+      "fieldtype": "Section Break"
+    },
+    {
+      "fieldname": "auth_username",
+      "label": "Auth Username",
+      "fieldtype": "Data",
+      "description": "Shared with BK/UrubutoPay for calling ERP endpoints.",
+      "depends_on": "eval:doc.enable_integration"
+    },
+    {
+      "fieldname": "auth_password",
+      "label": "Auth Password",
+      "fieldtype": "Password",
+      "description": "Shared with BK/UrubutoPay for calling ERP endpoints.",
+      "depends_on": "eval:doc.enable_integration"
+    },
+    {
+      "fieldname": "token_ttl_seconds",
+      "label": "Token TTL (seconds)",
+      "fieldtype": "Int",
+      "default": 86400,
+      "depends_on": "eval:doc.enable_integration"
+    },
+    {
+      "fieldname": "section_urls",
+      "label": "Webhook URLs (Give These to BK)",
+      "fieldtype": "Section Break"
+    },
+    {
+      "fieldname": "auth_url",
+      "label": "Auth URL",
+      "fieldtype": "Data",
+      "read_only": 1,
+      "depends_on": "eval:doc.enable_integration"
+    },
+    {
+      "fieldname": "validation_url",
+      "label": "Validation URL",
+      "fieldtype": "Data",
+      "read_only": 1,
+      "depends_on": "eval:doc.enable_integration"
+    },
+    {
+      "fieldname": "payment_notification_url",
+      "label": "Payment Notification URL",
+      "fieldtype": "Data",
+      "read_only": 1,
+      "depends_on": "eval:doc.enable_integration"
+    },
+    {
+      "fieldname": "payment_callback_url",
+      "label": "Payment Callback URL",
+      "fieldtype": "Data",
+      "read_only": 1,
+      "depends_on": "eval:doc.enable_integration"
+    },
+    {
+      "fieldname": "payment_reversal_url",
+      "label": "Payment Reversal URL",
+      "fieldtype": "Data",
+      "read_only": 1,
+      "depends_on": "eval:doc.enable_integration"
+    },
+    
+    {
+      "fieldname": "section_logging",
+      "label": "Logging",
+      "fieldtype": "Section Break"
+    },
+    {
+      "fieldname": "log_requests",
+      "label": "Log Incoming Requests",
+      "fieldtype": "Check",
+      "default": "1",
+      "depends_on": "eval:doc.enable_integration"
     }
   ],
-  "icon": "fa fa-plug",
-  "idx": 0,
-  "is_single": 1,
-  "links": [],
-  "modified": "2026-01-30 00:00:00.000000",
-  "modified_by": "Administrator",
-  "module": "BK Integration",
-  "name": "BK Integration Settings",
-  "naming_rule": "Set by user",
-  "owner": "Administrator",
   "permissions": [
     {
-      "create": 0,
-      "delete": 0,
-      "email": 1,
-      "export": 1,
-      "print": 1,
-      "read": 1,
-      "report": 1,
       "role": "System Manager",
+      "read": 1,
+      "write": 1,
+      "create": 1,
+      "delete": 1,
       "share": 1,
-      "write": 1
+      "print": 1,
+      "email": 1,
+      "report": 1,
+      "export": 1
     }
-  ],
-  "sort_field": "modified",
-  "sort_order": "DESC",
-  "states": []
+  ]
 }
