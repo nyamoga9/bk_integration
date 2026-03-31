@@ -16,8 +16,38 @@ def _settings():
 
 
 def _vendor_timestamp():
-    # Format required by UrubutoPay docs: YYYY-MM-DD HH:MM:SS
+    # Default vendor timestamp format used by most endpoints
     return now_datetime().strftime("%Y-%m-%d %H:%M:%S")
+
+
+def _customer_validation_timestamp():
+    # Customer validation sample requires 12-hour format, e.g. 2025-09-30 6:03:17 PM
+    ts = now_datetime().strftime("%Y-%m-%d %I:%M:%S %p")
+    return ts.replace(" 0", " ", 1)
+
+
+def _format_amount_for_vendor(value):
+    try:
+        n = float(value or 0)
+    except Exception:
+        return "0"
+
+    if n.is_integer():
+        return str(int(n))
+
+    return ("{0:.2f}".format(n)).rstrip("0").rstrip(".")
+
+
+def _build_validation_comment(invs):
+    if not invs:
+        return "school fees"
+
+    first = invs[0]
+    items = first.get("items") or []
+    if items:
+        return items[0]
+
+    return "school fees"
 
 
 def _vendor_ok(data=None, message="Successful", status=200):
@@ -345,33 +375,20 @@ def validate_customer():
 
     data = {
         "merchant_code": (getattr(s, "merchant_code", None) or "").strip(),
-        "merchant_name": (getattr(s, "merchant_name", None) or "").strip(),
-        "merchant_short_name": (getattr(s, "merchant_short_name", None) or "").strip(),
-        "payer_to_be_charged": (getattr(s, "payer_to_be_charged", None) or "NO").strip() or "NO",
-        "accept_card_payment": (getattr(s, "accept_card_payment", None) or "YES").strip() or "YES",
-        "need_term_and_year": (getattr(s, "need_term_and_year", None) or "NO").strip() or "NO",
-        "number_of_term": cint(getattr(s, "number_of_term", None) or 0),
-        "term_label_name": (getattr(s, "term_label_name", None) or "TERM").strip() or "TERM",
-        "commission_rate": float(getattr(s, "commission_rate", None) or 0),
-        "card_commission_rate": float(getattr(s, "card_commission_rate", None) or 0),
-        "wallet_bank_settlement": (getattr(s, "wallet_bank_settlement", None) or "").strip(),
-        "services": services,
-
         "payer_code": payer_code,
         "payer_names": customer.customer_name,
-        "amount": total_due,
         "currency": currency,
-
-        # As requested: always NO
         "payer_must_pay_total_amount": "NO",
-        "comment": "",
+        "amount": _format_amount_for_vendor(total_due),
+        "comment": _build_validation_comment(invs),
     }
 
-    msc = (getattr(s, "merchant_short_code", None) or "").strip()
-    if msc:
-        data["merchant_short_code"] = msc
-
-    return _vendor_ok(data, message="Successful", status=200)
+    return {
+        "status": 200,
+        "message": "validated successfully",
+        "timestamp": _customer_validation_timestamp(),
+        "data": data,
+    }
 
 
 @frappe.whitelist(allow_guest=True)
