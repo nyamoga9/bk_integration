@@ -68,6 +68,14 @@ def _vendor_fail(message="Unauthorized", status=401, data=None):
     }
 
 
+def _send_vendor_response(payload: dict, http_status=None):
+    payload = payload or {}
+    frappe.local.response["type"] = "json"
+    frappe.local.response["http_status_code"] = int(http_status or payload.get("status") or 200)
+    frappe.local.response.update(payload)
+    return
+
+
 def _get_payload():
     """Return request payload as dict (JSON body + form_dict)."""
     payload = {}
@@ -278,7 +286,7 @@ def _require_merchant_code(payload: dict):
 @frappe.whitelist(allow_guest=True)
 def ping():
     """Health check endpoint (no auth)."""
-    return _vendor_ok({"alive": True}, message="BK Integration is alive", status=200)
+    return _send_vendor_response(_vendor_ok({"alive": True}, message="BK Integration is alive", status=200))
 
 
 @frappe.whitelist(allow_guest=True)
@@ -304,18 +312,18 @@ def authenticate():
     password = (payload.get("password") or "").strip()
 
     if not user_name or not password:
-        return _vendor_fail(message="Missing credentials", status=400, data={})
+        return _send_vendor_response(_vendor_fail(message="Missing credentials", status=400, data={}), http_status=400)
 
     cfg_user = (getattr(s, "auth_username", None) or "").strip()
     cfg_pass = (s.get_password("auth_password") or "").strip()
 
     if user_name != cfg_user or password != cfg_pass:
-        return _vendor_fail(message="Unauthorized", status=401, data={})
+        return _send_vendor_response(_vendor_fail(message="Unauthorized", status=401, data={}), http_status=401)
 
     ttl = cint(getattr(s, "token_ttl_seconds", None) or 86400)
     token = _issue_token(ttl_seconds=ttl)
 
-    return _vendor_ok({"token": f"Bearer {token}"}, message="Successful", status=200)
+    return _send_vendor_response(_vendor_ok({"token": f"Bearer {token}"}, message="Successful", status=200), http_status=200)
 
 
 @frappe.whitelist(allow_guest=True)
@@ -329,24 +337,24 @@ def validate_customer():
     """
     ok, token_or_resp = _require_vendor_auth()
     if not ok:
-        return token_or_resp
+        return _send_vendor_response(token_or_resp, http_status=token_or_resp.get("status") or 401)
 
     payload = _get_payload()
 
     ok, mc_or_resp = _require_merchant_code(payload)
     if not ok:
-        return mc_or_resp
+        return _send_vendor_response(mc_or_resp, http_status=mc_or_resp.get("status") or 400)
 
     payer_code = (payload.get("payer_code") or payload.get("payerCode") or payload.get("customer_id") or "").strip()
     if not payer_code:
-        return _vendor_fail(message="payer_code is required", status=400, data={})
+        return _send_vendor_response(_vendor_fail(message="payer_code is required", status=400, data={}), http_status=400)
 
     customer = _get_customer_by_payer_code(payer_code)
     if not customer:
-        return _vendor_fail(message="Payer not found", status=404, data={})
+        return _send_vendor_response(_vendor_fail(message="Payer not found", status=404, data={}), http_status=404)
 
     if not _customer_allowed(customer.customer_group):
-        return _vendor_fail(message="Payer not allowed", status=403, data={})
+        return _send_vendor_response(_vendor_fail(message="Payer not allowed", status=403, data={}), http_status=403)
 
     s = _settings()
     invs = _get_outstanding_invoices(customer.name, company=(getattr(s, "default_company", None) or None))
@@ -383,12 +391,12 @@ def validate_customer():
         "comment": _build_validation_comment(invs),
     }
 
-    return {
+    return _send_vendor_response({
         "status": 200,
         "message": "validated successfully",
         "timestamp": _customer_validation_timestamp(),
         "data": data,
-    }
+    }, http_status=200)
 
 
 @frappe.whitelist(allow_guest=True)
@@ -396,17 +404,17 @@ def payment_notification():
     """Payment Notification webhook (pre-confirmation)."""
     ok, token_or_resp = _require_vendor_auth()
     if not ok:
-        return token_or_resp
+        return _send_vendor_response(token_or_resp, http_status=token_or_resp.get("status") or 401)
 
     payload = _get_payload()
 
     ok, mc_or_resp = _require_merchant_code(payload)
     if not ok:
-        return mc_or_resp
+        return _send_vendor_response(mc_or_resp, http_status=mc_or_resp.get("status") or 400)
 
     txn_id = (payload.get("transaction_id") or payload.get("transactionId") or payload.get("payment_reference") or "").strip()
     if not txn_id:
-        return _vendor_fail(message="transaction_id is required", status=400, data={})
+        return _send_vendor_response(_vendor_fail(message="transaction_id is required", status=400, data={}), http_status=400)
 
     tx = _ensure_txn_log(txn_id)
     tx.status = "Notified"
@@ -415,7 +423,7 @@ def payment_notification():
     tx.raw_payload = frappe.as_json(payload)
     tx.save(ignore_permissions=True)
 
-    return _vendor_ok({"transaction_id": txn_id}, message="Received", status=200)
+    return _send_vendor_response(_vendor_ok({"transaction_id": txn_id}, message="Received", status=200), http_status=200)
 
 
 @frappe.whitelist(allow_guest=True)
@@ -423,14 +431,14 @@ def payment_callback():
     """Payment Callback webhook (confirmation)."""
     ok, token_or_resp = _require_vendor_auth()
     if not ok:
-        return token_or_resp
+        return _send_vendor_response(token_or_resp, http_status=token_or_resp.get("status") or 401)
 
     s = _settings()
     payload = _get_payload()
 
     ok, mc_or_resp = _require_merchant_code(payload)
     if not ok:
-        return mc_or_resp
+        return _send_vendor_response(mc_or_resp, http_status=mc_or_resp.get("status") or 400)
 
     txn_id = (payload.get("transaction_id") or payload.get("transactionId") or payload.get("payment_reference") or "").strip()
     payer_code = (payload.get("payer_code") or payload.get("payerCode") or "").strip()
@@ -442,25 +450,25 @@ def payment_callback():
         amount = 0.0
 
     if not txn_id or not payer_code or not service_code or amount <= 0:
-        return _vendor_fail(message="Missing required fields (transaction_id, payer_code, service_code, amount)", status=400, data={})
+        return _send_vendor_response(_vendor_fail(message="Missing required fields (transaction_id, payer_code, service_code, amount)", status=400, data={}), http_status=400)
 
     tx = _ensure_txn_log(txn_id)
 
     if tx.status == "Completed" and tx.payment_entry:
-        return _vendor_ok({"payment_entry": tx.payment_entry}, message="Already processed", status=200)
+        return _send_vendor_response(_vendor_ok({"payment_entry": tx.payment_entry}, message="Already processed", status=200), http_status=200)
 
     customer = _get_customer_by_payer_code(payer_code)
     if not customer:
         tx.status = "Failed"
         tx.raw_payload = frappe.as_json(payload)
         tx.save(ignore_permissions=True)
-        return _vendor_fail(message="Payer not found", status=404, data={})
+        return _send_vendor_response(_vendor_fail(message="Payer not found", status=404, data={}), http_status=404)
 
     if not frappe.db.exists("Sales Invoice", service_code):
         tx.status = "Failed"
         tx.raw_payload = frappe.as_json(payload)
         tx.save(ignore_permissions=True)
-        return _vendor_fail(message="Invoice not found (service_code)", status=404, data={})
+        return _send_vendor_response(_vendor_fail(message="Invoice not found (service_code)", status=404, data={}), http_status=404)
 
     mode_of_payment = (getattr(s, "default_mode_of_payment", None) or "").strip() or None
 
@@ -481,7 +489,7 @@ def payment_callback():
     tx.completed_on = now_datetime()
     tx.save(ignore_permissions=True)
 
-    return _vendor_ok({"payment_entry": pe_name}, message="Successful", status=200)
+    return _send_vendor_response(_vendor_ok({"payment_entry": pe_name}, message="Successful", status=200), http_status=200)
 
 
 @frappe.whitelist(allow_guest=True)
@@ -489,26 +497,26 @@ def payment_reversal():
     """Payment Reversal webhook."""
     ok, token_or_resp = _require_vendor_auth()
     if not ok:
-        return token_or_resp
+        return _send_vendor_response(token_or_resp, http_status=token_or_resp.get("status") or 401)
 
     payload = _get_payload()
 
     ok, mc_or_resp = _require_merchant_code(payload)
     if not ok:
-        return mc_or_resp
+        return _send_vendor_response(mc_or_resp, http_status=mc_or_resp.get("status") or 400)
 
     txn_id = (payload.get("transaction_id") or payload.get("transactionId") or payload.get("payment_reference") or "").strip()
     if not txn_id:
-        return _vendor_fail(message="transaction_id is required", status=400, data={})
+        return _send_vendor_response(_vendor_fail(message="transaction_id is required", status=400, data={}), http_status=400)
 
     tx_name = frappe.db.get_value("BK Payment Transaction", {"bk_transaction_id": txn_id}, "name")
     if not tx_name:
-        return _vendor_fail(message="Transaction not found", status=404, data={})
+        return _send_vendor_response(_vendor_fail(message="Transaction not found", status=404, data={}), http_status=404)
 
     tx = frappe.get_doc("BK Payment Transaction", tx_name)
 
     if tx.status == "Reversed":
-        return _vendor_ok({"transaction_id": txn_id}, message="Already reversed", status=200)
+        return _send_vendor_response(_vendor_ok({"transaction_id": txn_id}, message="Already reversed", status=200), http_status=200)
 
     if tx.payment_entry and frappe.db.exists("Payment Entry", tx.payment_entry):
         pe = frappe.get_doc("Payment Entry", tx.payment_entry)
@@ -521,7 +529,7 @@ def payment_reversal():
     tx.reversal_payload = frappe.as_json(payload)
     tx.save(ignore_permissions=True)
 
-    return _vendor_ok({"transaction_id": txn_id}, message="Reversed", status=200)
+    return _send_vendor_response(_vendor_ok({"transaction_id": txn_id}, message="Reversed", status=200), http_status=200)
 
 
 @frappe.whitelist()
